@@ -1,0 +1,27 @@
+{
+  "name": "feedscanner",
+  "version": "0.1.0",
+  "description": "Node.js application for scanning RSS feeds for updates",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "make test"
+  },
+  "homepage": "http://github.com/DBeath/feedscanner",
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/DBeath/feedrsub"
+  },
+  "author": "David Beath",
+  "license": "MIT",
+  "dependencies": {
+    "request": "2.34.0",
+    "feedparser": "0.16.6",
+    "iconv": "2.0.7",
+    "async": "0.7.0"
+  },
+  "devDependencies": {
+    "mocha": "1.18.2",
+    "chai": "1.9.1"
+  }
+}

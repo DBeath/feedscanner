@@ -1,0 +1,766 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><title>David Beath</title><link>https://davidbeath.com/</link><description>The personal blog of David Beath.</description><atom:link href="https://davidbeath.com/rss.xml" type="application/rss+xml" rel="self"></atom:link><language>en</language><lastBuildDate>Fri, 21 Mar 2014 20:29:11 GMT</lastBuildDate><generator>Nikola &lt;http://getnikola.com/&gt;</generator><docs>http://blogs.law.harvard.edu/tech/rss</docs><item><title>Testing HTTP Responses in Node.js</title><link>https://davidbeath.com/posts/testing-http-responses-in-nodejs.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;It generally goes without saying these days that testing is an important part of the development process. However, testing is not always the easiest thing to master, and it can be difficult to know where to start, especially when it comes to learning a new language. &lt;a href="http://nodejs.org/"&gt;Node.js&lt;/a&gt; adds an extra twist on this difficulty, in that your code is running Asynchronously, and you will often be dealing with HTTP calls. &lt;/p&gt;
+&lt;p&gt;Having just been through the process of learning Node.js and working on a simple application that deals with calling and receiving responses from an external API, the most painful thing I found was that there aren't many tutorials on how to test HTTP requests and responses that I find particularly clear. So, this tutorial aims to provide clear information on how to effectively test your requests and responses, with a little bit about testing emitted events.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;h3&gt;Setting up the Test Environment&lt;/h3&gt;
+&lt;p&gt;For these tests we'll be using the &lt;a href="http://visionmedia.github.io/mocha/"&gt;Mocha&lt;/a&gt; testing framework along with the &lt;a href="http://chaijs.com/"&gt;Chai&lt;/a&gt; assertion library. We'll also use the popular &lt;a href="https://github.com/mikeal/request"&gt;Request&lt;/a&gt; library to send requests to our server.&lt;/p&gt;
+&lt;p&gt;Create a new folder for you project and install Mocha, Chai, and Request to it by running:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;npm install mocha chai request
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;By default, Mocha looks for tests in a folder called &lt;code&gt;/test&lt;/code&gt; within the project root, so create the folder with:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;mkdir test
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;In order to run our tests we'll set up a &lt;a href="http://en.wikipedia.org/wiki/Make_(software)#Makefiles"&gt;Makefile&lt;/a&gt; in the project root, the code of which looks like this:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;REPORTER = spec
+
+test:
+    @NODE_ENV=test ./node_modules/.bin/mocha \
+        --reporter $(REPORTER) \
+        --ui tdd
+
+test-w:
+    @NODE_ENV=test ./node_modules/.bin/mocha \
+        --reporter $(REPORTER) \
+        --growl \
+        --ui tdd \
+        --watch
+
+.PHONY: test test-w
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Be careful when you're creating the Makefile that you indent the lines with &lt;em&gt;Tab&lt;/em&gt; characters and not spaces.&lt;/p&gt;
+&lt;p&gt;You can now run your tests once with:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;make test
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;You should see something like &lt;code&gt;0 passing (2ms)&lt;/code&gt;, which indicates that the test suite ran but didn't find any tests. If you see an error then the most likely options are probably that you've got spaces in your Makefile, or that Make can't find Mocha, in which case check that you have a &lt;code&gt;/node_modules&lt;/code&gt; directory in your project folder and that Mocha is installed to it.&lt;/p&gt;
+&lt;p&gt;Alternatively, you can also run the tests continuously in the background with:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;make test-w
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The &lt;em&gt;make test&lt;/em&gt; command should also be added to the &lt;em&gt;scripts&lt;/em&gt; section of your &lt;em&gt;package.json&lt;/em&gt; file, and Mocha, Chai, and Request to &lt;em&gt;devdependencies&lt;/em&gt;; like so:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;// ./package.json
+
+{
+    "scripts": {
+        "test": "make test"
+    },
+    "devDependencies": {
+        "mocha": "*",
+        "chai": "*",
+        "request": "*"
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Creating our Server&lt;/h3&gt;
+&lt;p&gt;Next we'll create the server that we'll be testing (Yes, by most standards writing the code before the tests is backasswards, but this is for demo purposes). This server will listen for requests and respond according to the content of the request header. If the request has a &lt;a href="http://en.wikipedia.org/wiki/List_of_HTTP_header_fields"&gt;Content-Type&lt;/a&gt; header of 'text/plain' it will respond with an HTTP 200 "OK" code and emit an &lt;a href="http://nodejs.org/api/events.html"&gt;Event&lt;/a&gt; called &lt;em&gt;success&lt;/em&gt; containing the body of the request. For any other Content-Type header we will return an HTTP 400 "Bad Request" error.&lt;/p&gt;
+&lt;p&gt;Create a &lt;code&gt;server.js&lt;/code&gt; file in a new &lt;code&gt;lib&lt;/code&gt; folder in your project directory, with the code below:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;// ./lib/server.js
+
+var http = require('http');
+
+var server = module.exports = http.createServer(function (req, res) {
+
+    if (req.headers['content-type'] === 'text/plain') {
+
+        var body = '';
+        req.on('data', function (chunk) {
+            body += chunk.toString();
+        });
+
+        req.on('end', function () {
+            res.writeHead(200, {'Content-Type': 'text/plain'});
+            res.end('correct header');
+            server.emit('success', body);
+        });
+
+    } else {
+
+        res.writeHead(400, {'Content-Type': 'text/plain'});
+        res.end('wrong header');
+    }
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Setting up the Tests&lt;/h3&gt;
+&lt;p&gt;Before we write our first test, we need to do a little more setup. The first thing we will need to do is to require Chai's &lt;em&gt;expect&lt;/em&gt; function in our test suite. So we'll create a file in our &lt;em&gt;/test&lt;/em&gt; folder called tests.js:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;touch test/tests.js
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;And with the first two lines we'll require the expect function from Chai:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;var expect = require('Chai').expect;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;You may have noticed that our server doesn't start automatically, as it has no &lt;em&gt;listen&lt;/em&gt; call. The second line of our server code contains a &lt;a href="http://nodejs.org/api/modules.html"&gt;module export&lt;/a&gt; that allows our server to be imported into another file. We can then start the server before our tests run, and close it when they finish. To do this we need to import our server into 'tests.js', and within the main 'describe' function in which we write our tests we'll include 'before' and 'after' functions.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;// ./test/tests.js
+
+var server = require('../lib/server.js');
+
+describe('server response', function () {
+    before(function () {
+        server.listen(8000);
+    });
+
+    after(function () {
+        server.close();
+    });
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Writing the Response Tests&lt;/h3&gt;
+&lt;p&gt;We can now get round to actually writing our tests. We'll write three tests, in order to test each response from our server; the incorrect header response, the successful header response, and the data emitted on a successful response. First, we need to require the Request library at the beginning of &lt;em&gt;test.js&lt;/em&gt;:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;var request = require('request');
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now we can include the test within our 'describe' function, immediately below the 'after' function:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;it('should return 400', function (done) {
+    request.get('http://localhost:8000', function (err, res, body){
+        expect(res.statusCode).to.equal(400);
+        expect(res.body).to.equal('wrong header');
+        done();
+    });
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The &lt;em&gt;it&lt;/em&gt; statement, just like &lt;em&gt;describe&lt;/em&gt;, &lt;em&gt;before&lt;/em&gt;, and &lt;em&gt;after&lt;/em&gt;, follows the &lt;a href="http://en.wikipedia.org/wiki/Behavior-driven_development"&gt;BDD&lt;/a&gt; standard for writing tests. We begin by describing what the test should return, and then a function containing the tests. Because our code is Asynchronous, we need to invoke a callback (in this case called &lt;em&gt;done&lt;/em&gt;) so that Mocha knows to wait until the test is complete. &lt;/p&gt;
+&lt;p&gt;The second line begins our request to the server. We're calling request with a &lt;em&gt;GET&lt;/em&gt; (though it could just as well be &lt;em&gt;POST&lt;/em&gt;) and passing in the address of our server; in this case localhost listening on port 8000. There is also a function with &lt;em&gt;error&lt;/em&gt;, &lt;em&gt;response&lt;/em&gt;, and &lt;em&gt;body&lt;/em&gt; callbacks. Within the function we're listening for a response, and this is where the test really happens. &lt;/p&gt;
+&lt;p&gt;The Chai assertion library works by chaining together natural language assertions, making the tests fairly easy to read. In this case we're expecting the StatusCode of the response to equal &lt;em&gt;400&lt;/em&gt; and the body of the response to read &lt;em&gt;wrong header&lt;/em&gt;. The final part of the code is the &lt;em&gt;done()&lt;/em&gt; callback; without which the test will exit with a timeout error.&lt;/p&gt;
+&lt;p&gt;Our second test will test the response if the request contains the &lt;em&gt;Content-Type: text/plain&lt;/em&gt; header. &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;it('should return 200', function (done) {
+    var options = {
+        url: 'http://localhost:8000',
+        headers: {
+            'Content-Type': 'text/plain'
+        }
+    };
+    request.get(options, function (err, res, body) {
+        expect(res.statusCode).to.equal(200);
+        expect(res.body).to.equal('correct header');
+        done();
+    });
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;This test is much like the first, expect we've added an options object containing the destination url and headers of our request. This is passed as the first parameter of the request, so that our request will be sent to http://localhost:8000 with the correct &lt;em&gt;Content-Type&lt;/em&gt; header. By creating an options object like this it become very easy to use the Request library to create a request with any parameters we'd like.&lt;/p&gt;
+&lt;p&gt;These two tests show the basic form for creating thorough HTTP Server tests. By adding more expect statements and adding different &lt;a href="http://chaijs.com/api/bdd/"&gt;parameters&lt;/a&gt; to the chain, you can easily test all the different parts of your responses.&lt;/p&gt;
+&lt;h3&gt;Testing Emitters&lt;/h3&gt;
+&lt;p&gt;Now that we can test our responses, I figure that the next step might be to test what our code is emitting internally. While not technically part of the scope of this article, if you're developing and testing HTTP Requests and Responses in Node.js, at some point your going to be using event emitters and listeners, and in fact you already have. In our server the code &lt;code&gt;req.on('data', function () {});&lt;/code&gt; is an event listener, listening for the &lt;em&gt;data&lt;/em&gt; event that is emitted when we receive data. Same with the &lt;code&gt;req.on('end')&lt;/code&gt; function.&lt;/p&gt;
+&lt;p&gt;As you can see if you look back at our server code, once we receive the &lt;em&gt;end&lt;/em&gt; event, we send out our own &lt;em&gt;success&lt;/em&gt; event that contains the body of the received request. To test that we're successfully emitting, we'll add a body to our request, and we'll need to set a timeout in our test to make sure that the event is firing within a reasonable time.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;it('should emit request body', function (done) {
+    var options = {
+        url: 'http://localhost:8000',
+        headers: {
+            'Content-Type': 'text/plain'
+        },
+        body: 'successfully emitted request'
+    };
+    var eventFired = false;
+
+    request.get(options, function (err, res, body) {});
+
+    server.on('success', function (data) {
+        eventFired = true;
+        expect(data).to.equal('successfully emitted request');
+    });
+
+    setTimeout( function () {
+        expect(eventFired).to.equal(true);
+        done();
+    }, 10);
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;We have now attached a body to our request, that should be emitted back to us, and an &lt;em&gt;eventFired&lt;/em&gt; variable set to &lt;em&gt;false&lt;/em&gt;, that will be set to true when the event fires. The expect statements are no longer in the &lt;em&gt;request&lt;/em&gt; function, as we are not testing the HTTP response. The code &lt;code&gt;server.on('success', function (data) {})&lt;/code&gt; listens for the success event, and passes the data from that event into a function. Within the function we set &lt;em&gt;eventFired&lt;/em&gt; to true, and test to see that the emitted data is correct. The &lt;em&gt;setTimeout&lt;/em&gt; function is required in order to properly test that the event fired. If the event does not fire, then the test will fail gracefully rather than with a timeout error.&lt;/p&gt;
+&lt;h3&gt;Conclusion&lt;/h3&gt;
+&lt;p&gt;We now have some basic tests that should reasonably cover the server code. This basic setup should work with most Node.js projects, and the general idea of this sort of testing is an essential skill in any programming language. If you'd like to have a look at or download and test the full code yourself then it can be found &lt;a href="https://github.com/DBeath/node-test-tutorial"&gt;here&lt;/a&gt;. &lt;/p&gt;&lt;/div&gt;</description><category>servers</category><category>Web</category><category>tutorial</category><category>IT</category><guid>https://davidbeath.com/posts/testing-http-responses-in-nodejs.html</guid><pubDate>Mon, 03 Mar 2014 01:29:39 GMT</pubDate></item><item><title>Bittorrent Sync is not FOSS</title><link>https://davidbeath.com/posts/bittorrent-sync-is-not-foss.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;&lt;a href="http://www.bittorrent.com/sync"&gt;Bittorrent Sync&lt;/a&gt; has been getting a lot of press lately for being a really good file synchronisation solution. I was thinking about installing it on my systems today, to act as a secure, decentralised alternative to &lt;a href="https://www.dropbox.com"&gt;Dropbox&lt;/a&gt;. Then I had a sudden thought: "Wait, is Bittorrent Sync open source?". &lt;/p&gt;
+&lt;p&gt;Turns out no, &lt;a href="http://forum.bittorrent.com/topic/17782-bittorrent-sync-faq-unofficial/"&gt;it's not&lt;/a&gt;. &lt;/p&gt;
+&lt;p&gt;Well, crap. &lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;p&gt;It sounds like such a good system, and just because it's not &lt;a href="http://en.wikipedia.org/wiki/Free_and_open-source_software"&gt;FOSS&lt;/a&gt; doesn't mean it's not a really good piece of software, and as perfectly secure as it's possible to be these days. After all, Dropbox is closed and everyone (including me) trusts them to a certain extent (with non-critical stuff), though it doesn't exactly have the strongest reputation for security. The problem is that anyone who knows anything about computer security and cryptography also knows that a security solution that no-one else can inspect is a potentially insecure solution.&lt;/p&gt;
+&lt;p&gt;While I would probably never do any more than glance at the source code if it was open, I would feel much safer in the knowledge that people much more clued up than me about security had most likely pored over the code looking for bugs and security holes. I trust &lt;a href="http://keepass.info/"&gt;KeePass&lt;/a&gt; with my passwords because anyone can check the code to make sure it's not transmitting all my passwords to the NSA, GCHQ, GCSB, any other alphabet soup agency, Google, Facebook, or the Russian Mafia (to list just a few possible nefarious organisations). Likewise for the other open source software I use, I trust that there's enough people looking at the code that someone would raise a stink if something was awry.&lt;/p&gt;
+&lt;p&gt;Looking through the Bittorrent forums, this has all been debated to death. The BT Sync team have stated that they're considering the option of taking it open source. I hope they do. In the meantime, I figure I might as well go ahead and use it; the only files of mine that really require strong encryption is the aforementioned KeePass database, and that's already encrypted.&lt;/p&gt;
+&lt;p&gt;However, if I do ever find myself in a position where my life and liberty depend on secure communications, I won't be using anything that isn't open source.&lt;/p&gt;&lt;/div&gt;</description><category>IT</category><category>Security</category><guid>https://davidbeath.com/posts/bittorrent-sync-is-not-foss.html</guid><pubDate>Tue, 10 Dec 2013 08:26:33 GMT</pubDate></item><item><title>Configuring SSL in Nginx</title><link>https://davidbeath.com/posts/configuring-ssl-in-nginx.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;This post aims to be a fairly thorough guide to getting &lt;a href="http://en.wikipedia.org/wiki/Secure_Sockets_Layer"&gt;SSL&lt;/a&gt; up and running on an &lt;a href="http://en.wikipedia.org/wiki/Nginx"&gt;Nginx&lt;/a&gt; server, largely for my own reference in future, but it may prove useful to anyone else who stumbles across it. I'm going to assume that you have a working installation of Nginx, or know how to get one going. If not, then bookmark this page and find a tutorial on how to get it going first, such as the section on Nginx in my post &lt;a href="https://davidbeath.com/posts/installing-tiny-tiny-rss-from-scratch.html"&gt;here&lt;/a&gt;, or the &lt;a href="http://nginx.org/en/docs/install.html"&gt;Installation&lt;/a&gt; and &lt;a href="http://nginx.org/en/docs/beginners_guide.html"&gt;Beginner's Guide&lt;/a&gt; pages on the official site.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;h3&gt;Get an SSL Certificate&lt;/h3&gt;
+&lt;p&gt;The first step in setting up SSL on your server is to procure an &lt;a href="https://www.globalsign.eu/ssl-information-center/what-is-an-ssl-certificate.html"&gt;SSL Certificate&lt;/a&gt; from an approved &lt;a href="http://en.wikipedia.org/wiki/Certificate_authority"&gt;Certificate Authority&lt;/a&gt; (CA). The easiest way to do this is to purchase one from a certificate reseller such as &lt;a href="https://www.cheapssls.com/"&gt;CheapSSLs.com&lt;/a&gt;. &lt;/p&gt;
+&lt;p&gt;For a single site with no subdomains, such as a blog, that doesn't require all the extra features of more expensive certificates, then a certificate such as &lt;a href="https://www.cheapssls.com/comodo-ssl-certificates/positivessl.html"&gt;Comodo Positive SSL&lt;/a&gt; will do fine.&lt;/p&gt;
+&lt;p&gt;Once you've purchased the certificate, you'll need to create a Certificate Signing Request.&lt;/p&gt;
+&lt;h4&gt;Creating a CSR&lt;/h4&gt;
+&lt;p&gt;A Certificate Signing Request (CSR) is a file that contains the application information for your certificate, such as your location and the name of the domain you want to secure, as well as your &lt;a href="http://en.wikipedia.org/wiki/Public-key_cryptography"&gt;Public Key&lt;/a&gt;. For creating the CSR we'll be using &lt;a href="http://www.openssl.org/"&gt;OpenSSL&lt;/a&gt;, so if you don't have that on your server you can install it with the following command:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install openssl
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Before we start creating files, it's recommended that you have a proper location to store them in. On Linux systems this would be something like &lt;code&gt;/etc/ssl/localcerts/&lt;/code&gt;, so lets start there.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo mkdir /etc/ssl/localcerts
+sudo cd /etc/ssl/localcerts
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;To generate the public and private keys that will be used for the CSR, use this command:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo openssl req -nodes -newkey rsa:2048 -days 365 -keyout myserver.key -out server.csr
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;This will create two files; &lt;code&gt;myserver.key&lt;/code&gt;, the private key file, and &lt;code&gt;server.csr&lt;/code&gt;, the Certificate Signing Request. When you enter the above command, you should of course set the name of both files to one appropriate for the server you are securing. &lt;/p&gt;
+&lt;p&gt;Generally your CA should require you to use &lt;a href="http://en.wikipedia.org/wiki/RSA_(algorithm)"&gt;RSA&lt;/a&gt; 2048, this is specified with the &lt;code&gt;-newkey rsa:2048&lt;/code&gt; portion of the command. If you purchased a certificate that is valid for more than a year, then the &lt;code&gt;-days 365&lt;/code&gt; portion should be set to the number of days your certificate is valid.&lt;/p&gt;
+&lt;p&gt;Once you've entered the above command, you'll be asked to enter the details into your CSR. These details (with examples) are:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Country Name (2 letter code) [AU]: US
+State or Province Name (full name) [Some-State]: California
+Locality Name (eg, city) []: Los Angeles
+Organization Name (eg, company) [Internet Widgits Pty Ltd]: ACME Ltd
+Organizational Unit Name (eg, section) []: Widgets
+Common Name (eg, YOUR name) []: widgets.acme.com
+Email Address []:
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;And two 'extra', comletely optional details:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;A challenge password []: 
+An optional company name []:
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;If you enter a period '.' into one of the above fields then the field will be left blank.&lt;/p&gt;
+&lt;p&gt;One thing that seems to get glossed over is that the &lt;strong&gt;Common Name&lt;/strong&gt; field is the &lt;a href="http://en.wikipedia.org/wiki/Fully_qualified_domain_name"&gt;fully qualified domain name&lt;/a&gt; (FQDN) of your site. So if you're wanting to secure &lt;code&gt;example.com&lt;/code&gt;, then that's what you put in the common name field. If you're securing a subdomain like &lt;code&gt;subdomain.example.com&lt;/code&gt;, then make sure you enter it like that. Unless you've bought a wildcard certificate, then your certificate will only cover a single domain or subdomain. &lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;WARNING&lt;/strong&gt;: Make very sure you've entered the Common Name correctly before you submit your CSR. (Yes, I have made this mistake. Don't do important things when you're tired.)&lt;/p&gt;
+&lt;p&gt;Once you've created the CSR, go to the site you purchased your certificate from and activate it. You'll be asked to enter your CSR into an online form, so open your CSR file up in a text editor and paste the entire contents into the enrollment form, including the BEGIN and END lines.&lt;/p&gt;
+&lt;h4&gt;Installing your Certificate&lt;/h4&gt;
+&lt;p&gt;Once your CSR has been approved, you'll get an email containing your new certificate, and the Root certificates required. Copy these to the folder where you intend to store your certificates. For this example I'll be using my Nginx directory &lt;code&gt;/usr/local/nginx/ssl/&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;You may want to combine the certificates together into one file. If so, then you can use the &lt;code&gt;cat&lt;/code&gt; command to concatenate the files in reverse order of authority. For example, if you've got a Comodo Positive SSL Certificate, then you should have three files; the certificate for your domain (eg. &lt;code&gt;example.com.crt&lt;/code&gt;), the intermediate certificate (eg. &lt;code&gt;PositiveSSLCA2.crt&lt;/code&gt;), and the root certificate (eg. &lt;code&gt;AddTrustExternalCARoot.crt&lt;/code&gt;). So to concatenate these files the command would be:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo cat example.com.crt PositiveSSLCA2.crt AddTrustExternalCARoot.crt &amp;gt;&amp;gt; example.com.chained.crt
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Configuring Nginx&lt;/h3&gt;
+&lt;p&gt;You can now set about adding your certificate to your server configuration in Nginx. If you installed Nginx from a package, it should have SSL enabled already, otherwise if you're building from source you'll have to specifically enable it during configuration.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;./configure --with-http_ssl_module --with_http_spdy_module
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;If you're using SSL then you may as well use &lt;a href="http://en.wikipedia.org/wiki/SPDY"&gt;SPDY&lt;/a&gt; to help speed up the connection.&lt;/p&gt;
+&lt;p&gt;Now you can configure your Virtual Hosts for SSL. In the server block of your configuration, you need to set it to listen on port 443, specify the certificate and private key, and SSL protocols and cipher settings.&lt;/p&gt;
+&lt;p&gt;This is an example of a basic Nginx Virtual Host file with SSL enabled:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;server {
+    listen 443 ssl spdy;
+    server_name example.com;
+
+    root /srv/www/example.com;
+    index index.html;
+
+    ssl_certificate /usr/local/nginx/ssl/example.com.chained.crt;
+    ssl_certificate_key /etc/ssl/localcerts/example.com.key;
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The listen directive specifies that the server should listen on the HTTPS port, 443, instead of the usual port 80, that SSL is on, and that it is using the SPDY protocol. The ssl_certificate directive points to the location of the chained certificate we created. The ssl_certificate_key directive points to the private key that was created when we created the certificate signing request.&lt;/p&gt;
+&lt;p&gt;The above provides the minimum configuration required to enable SSL on Nginx. All you need to do is restart Nginx, and you should be able to visit your site using HTTPS.&lt;/p&gt;
+&lt;h4&gt;SSL Security in Nginx&lt;/h4&gt;
+&lt;p&gt;Of course, the above basic configuration only uses the most basic default security, so you'll probably want to do some additional configuration.&lt;/p&gt;
+&lt;p&gt;The first thing you'll want to do is to set the SSL Ciphers your server will use. This &lt;a href="http://blog.cloudflare.com/staying-on-top-of-tls-attacks"&gt;post&lt;/a&gt; has a good explanation on the background of using ciphers. The exact list of ciphers you should use is dependent on how secure you want to be, and what performance considerations you have. The ciphers I use are:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;ssl_ciphers ECDHE-RSA-AES256-SHA384:AES256-SHA256:RC4:HIGH:!MD5:!aNULL:!eNULL:!NULL:!DH:!EDH:!AESGCM;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;This gives me an 'A' rating on the &lt;a href="https://www.ssllabs.com/ssltest/index.html"&gt;SSL Server Test&lt;/a&gt;, while still providing decent performance.&lt;/p&gt;
+&lt;p&gt;The rest of my SSL configuration is as follows:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;ssl_session_timeout 5m;
+ssl_prefer_server_ciphers on;
+ssl_session_cache shared:SSL:10m;
+ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+ssl_ecdh_curve secp521r1;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;&lt;em&gt;ssl_session_timeout 5m;&lt;/em&gt; is the time it takes for the client's ssl session information to be removed from the cache. A longer time means that the ssl session won't have to be renegotiated as often, improving performance if there are a lot of connections. 5 minutes is the default time for many client browsers.&lt;/p&gt;
+&lt;p&gt;&lt;em&gt;ssl_prefer_server_ciphers on;&lt;/em&gt; means that the server will prefer to use ciphers specified in the &lt;code&gt;ssl_ciphers&lt;/code&gt; directive over the ciphers preferred by clients.&lt;/p&gt;
+&lt;p&gt;&lt;em&gt;ssl_session_cache shared:SSL:10m;&lt;/em&gt; lets Nginx use its own cache instead of the one provided by OpenSSL, thus allowing Nginx to separate SSL jobs between its own workers.&lt;/p&gt;
+&lt;p&gt;&lt;em&gt;ssl_protocols TLSv1 TLSv1.1 TLSv1.2;&lt;/em&gt; is the list of supported protocols, which in this case is only TLSv1 or greater. SSLv3 and below are not recommended due to security vulnerabilities, and most browsers support TLS now. &lt;/p&gt;
+&lt;p&gt;&lt;em&gt;ssl_ecdh_curve secp521r1;&lt;/em&gt; is the &lt;a href="http://en.wikipedia.org/wiki/Elliptic_curve_cryptography"&gt;Elliptic curve&lt;/a&gt; key used for the ECDHE cipher.&lt;/p&gt;
+&lt;p&gt;If you want a much more in-depth look at securely configuring Nginx, then &lt;a href="https://calomel.org/nginx.html"&gt;calomel.org&lt;/a&gt; has an excellently thorough post detailing nearly everything you need to know.&lt;/p&gt;
+&lt;h4&gt;Redirecting to HTTPS&lt;/h4&gt;
+&lt;p&gt;If you want to redirect all your traffic to the SSL version of your site, then you'll need to specify another Virtual Host to accept HTTP traffic and redirect it to HTTPS.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;server {
+    listen 80;
+    server_name example.com;
+    return 301 https://example.com$request_uri;
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;This server block listens on port 80, and then performs an &lt;a href="http://en.wikipedia.org/wiki/HTTP_301"&gt;HTTP 301&lt;/a&gt; redirect to the requested URI. As this is a permanent redirect of a full URL then &lt;code&gt;return&lt;/code&gt; rather than &lt;code&gt;rewrite&lt;/code&gt; is the correct Nginx directive to use.&lt;/p&gt;
+&lt;h3&gt;Conclusion&lt;/h3&gt;
+&lt;p&gt;You should now have a secure implementation of SSL on your website. You may want to use tools such as &lt;a href="https://developers.google.com/speed/pagespeed/"&gt;pagespeed&lt;/a&gt; to test the speed of your site, as it may require a bit of tweaking to get the best balance between performance and security.&lt;/p&gt;&lt;/div&gt;</description><category>servers</category><category>Web</category><category>IT</category><category>tutorial</category><category>Nginx</category><guid>https://davidbeath.com/posts/configuring-ssl-in-nginx.html</guid><pubDate>Sun, 17 Nov 2013 03:32:49 GMT</pubDate></item><item><title>Ubuntu Post-Install Guide</title><link>https://davidbeath.com/posts/ubuntu-post-install-guide.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;Having reinstalled Ubuntu a few times on various machines, I figured it's about time that I recorded a few of the post installation steps I take, so that I don't have to keep looking them up. The instructions below are for Ubuntu 13.10, and can be done in any order.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;h4&gt;Install Bumblebee&lt;/h4&gt;
+&lt;p&gt;Bumblebee is a package that prevents laptops that run Nvidia Optimus graphics from running the dedicated graphics card permanently. Installing this is the first thing I do, otherwise things get quite toasty. Further instructions &lt;a href="https://wiki.ubuntu.com/Bumblebee"&gt;here&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo add-apt-repository ppa:bumblebee/stable
+sudo apt-get update
+sudo apt-get install bumblebee bumblebee-nvidia primus linux-headers-generic
+
+sudo shutdown -r now
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Disable Apport&lt;/h4&gt;
+&lt;p&gt;Apport is the error reporting service for Ubuntu. Most of the errors it pops up with are pretty minor, and Canonical knows about them by now anyway. You can either get rid of it entirely or just disable it. Instructions from &lt;a href="http://howtoubuntu.org/how-to-disable-apport-error-reporting-in-ubuntu#.UoVIoXiLe1E"&gt;here&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;To disable Apport:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo service apport stop
+
+sudo nano /etc/default/apport
+enabled=0
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;To remove Apport entirely:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get purge apport
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Install Unity-Tweak-Tool&lt;/h4&gt;
+&lt;p&gt;Unity Tweak Tool is always good for tweaking the Unity interface to your preferences. I think the default launcher is much too large, and I like to set the font-size smaller too. &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install unity-tweak-tool
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Install Sublime Text 3&lt;/h4&gt;
+&lt;p&gt;Sublime Text 3 seems to be everyone's favourite text editor these days, and it's what I use to write these blog posts. Instructions courtesy of &lt;a href="http://www.webupd8.org/2013/07/sublime-text-3-ubuntu-ppa-now-available.html"&gt;webupd8.org&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo add-apt-repository ppa:webupd8team/sublime-text-3
+sudo apt-get update
+sudo apt-get install sublime-text-installer
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;To prevent annoying update notifications, once Sublime Text is open add the following code in: Preferences &amp;gt; Settings - User:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;"update_check": false
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Install Numix GTK3 Theme&lt;/h4&gt;
+&lt;p&gt;Numix is my favourite GTK3 Theme, and looks good in Unity. Check it out at their &lt;a href="http://numixproject.org/"&gt;website&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo add-apt-repository ppa:numix/ppa
+sudo apt-get update 
+sudo apt-get install numix-gtk-theme
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Alternatively, for a few other themes as well if you're running 13.10:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install shimmer-themes
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Remove Ubuntu One&lt;/h4&gt;
+&lt;p&gt;Ubuntu One doesn't really seem to be under active development anymore, and there are better cloud solutions out there, so you might as well remove it. Instructions from &lt;a href="http://askubuntu.com/questions/353987/remove-ubuntu-one"&gt;here&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;killall ubuntuone-login ubuntuone-preferences ubuntuone-syncdaemon
+sudo rm -rf ~/.local/share/ubuntuone
+rm -rf ~/.cache/ubuntuone
+rm -rf ~/.config/ubuntuone
+mv ~/Ubuntu\ One/ ~/UbuntuOne_old/
+
+sudo apt-get purge ubuntuone-client python-ubuntuone-*
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Disable Login Drum Sounds&lt;/h4&gt;
+&lt;p&gt;I hate login sounds, and a quick search shows a lot of other people do as well, yet Ubuntu no longer has any options to disable them. So if you can't stop it from playing the sound, just remove the file. These &lt;a href="http://www.linuxandlife.com/2012/05/how-to-turn-off-or-change-login-sound.html"&gt;instructions&lt;/a&gt; should work regardless of version. &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;cd /usr/share/sounds/ubuntu/stereo
+mv system-ready.ogg system-ready.ogg.old
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Install VLC Player&lt;/h4&gt;
+&lt;p&gt;&lt;a href="http://www.videolan.org/vlc/index.html"&gt;VLC&lt;/a&gt; is the best video player, enough said.‎&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install vlc
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Disable Amazon Shopping&lt;/h4&gt;
+&lt;p&gt;A lot of people really dislike the direction the Canonical has taken by integrating online shopping searches into Unity Lens search, and I agree. There is a button to turn it off in the settings, but I'd just as soon &lt;a href="http://www.webupd8.org/2013/10/how-to-disable-amazon-shopping.html"&gt;remove it altogether&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Paste the following into your terminal:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;gsettings set com.canonical.Unity.Lenses disabled-scopes "['more_suggestions-amazon.scope', 'more_suggestions-u1ms.scope', 'more_suggestions-populartracks.scope', 'music-musicstore.scope', 'more_suggestions-ebay.scope', 'more_suggestions-ubuntushop.scope', 'more_suggestions-skimlinks.scope']"
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Improve Battery Life&lt;/h4&gt;
+&lt;p&gt;Some &lt;a href="http://www.webupd8.org/2013/10/8-things-to-do-after-installing-ubuntu.html"&gt;instructions&lt;/a&gt; for a tool that may help improve laptop battery life. Warning: May cause issues with external devices due to powering off USB ports.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-add-repository ppa:linrunner/tlp
+sudo apt-get update
+sudo apt-get install tlp tlp-rdw
+sudo tlp start
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Development Tools&lt;/h4&gt;
+&lt;p&gt;So I don't forget, these are some of the packages that are useful to have to development purposes.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install python-software-properties python python-pip g++ make python-dev git
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Instructions for installing nodejs.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo add-apt-repository ppa:chris-lea/node.js
+sudo apt-get update
+sudo apt-get install nodejs
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;KeePass&lt;/h4&gt;
+&lt;p&gt;&lt;a href="http://keepass.info/"&gt;KeePass&lt;/a&gt; is my preferred password manager. Keep the password file in Dropbox and you can access it anywhere. The install instructions for Ubuntu are &lt;a href="http://sourceforge.net/p/keepass/discussion/329220/thread/17d1bd26"&gt;here&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-add-repository ppa:jtaylor/keepass
+sudo apt-get update
+sudo apt-get install keepass2
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Dropbox&lt;/h4&gt;
+&lt;p&gt;You can find the download for Dropbox on their &lt;a href="https://www.dropbox.com/install?os=lnx"&gt;site&lt;/a&gt; as usual. In Ubuntu 13.10 you may come across an issue where the Dropbox icon isn't showing in the status bar. If so, just install the following package:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install libappindicator1
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;</description><category>IT</category><category>tutorial</category><guid>https://davidbeath.com/posts/ubuntu-post-install-guide.html</guid><pubDate>Fri, 15 Nov 2013 01:13:44 GMT</pubDate></item><item><title>Narratives in the Media</title><link>https://davidbeath.com/posts/narratives-in-the-media.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;Over the past few days I have been reading &lt;a href="https://www.goodreads.com/book/show/194805.Understanding_Power"&gt;Understanding Power: The Indispensable Chomsky&lt;/a&gt;, and even though I've previously read about a few of the cases he describes, the sheer scale of the duplicity Chomsky presents here is still shocking. If even one of his narratives about the complicity of the Media in covering up or spinning atrocities is true, then it ought to rock people's beliefs about the way political power and the Media operate. I agree with &lt;a href="http://www.aaronsw.com/weblog/epiphany"&gt;Aaron Swartz's view&lt;/a&gt;, that it really does change the way you look at the world.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;p&gt;It's something I've been thinking about recently, as there's a narrative within the NZ Media that I've been following, and it's annoyingly contrary to reality. It doesn't even register as a blip on the scale of nastiness and groupthink that Chomsky describes, but the very banality of the situation highlights for me just how plausible is Chomsky's narrative. On their own, each one of his stories doesn't seem believable, and frankly anyone sane would rather not believe them. Yet when see how the Media is willing to twist something that seems harmless, that isn't one of those situations so horrible that one would rather believe the exact opposite, then those stories do become all too possible.&lt;/p&gt;
+&lt;p&gt;Now, the aforementioned banal story that irks me in NZ Media is that the &lt;a href="https://www.greens.org.nz"&gt;Green Party&lt;/a&gt; are a bunch of loony socialists, with far-left monetary and tax policies, that will lead the country to economic ruin. I really don't think that could be much further from the truth. If you actually look at the Green's policies, there's really not much (if anything) that's outside the policies of conventional economic theory. Yes, they are on the left leaning end of accepted theory, but well within limits of policies that have been, and are still being, used successfully by other (non-loony, non-socialist, possibly right-leaning) countries elsewhere.&lt;/p&gt;
+&lt;p&gt;For example, we've been subjected to the ridiculous narrative that &lt;a href="http://en.wikipedia.org/wiki/Quantitative_easing"&gt;Quantitative Easing&lt;/a&gt; is loony nutjob stuff that will turn us into Zimbabwe or Weimar Germany; yet the US, UK, and Japan have been engaging in it wholeheartedly since 2008 (to debatable effect, but the point stands). Likewise, a &lt;a href="http://en.wikipedia.org/wiki/Capital_gains_tax"&gt;Capital Gains Tax&lt;/a&gt; is used by Australia, Germany, Canada, the US, and others. For all the various faults of those economies, I doubt many economic commentators would describe them as basket cases. In the same vein, if you look at the Green's proposed tax rates, they're really quite conservative and still relatively low by historic standards.&lt;/p&gt;
+&lt;p&gt;Like I said, the above examples are quite petty and banal when compared to the stories of covered up genocide, economic (and literal) terrorism, and the Media complicity involved. But apart from being a pet peeve of mine, these examples do show that it doesn't really matter what the truth is, if the establishment doesn't like it, they'll make up their own story. I'm personally not at all against business, as long as they don't behave in the stereotypical corporate sociopathic way, so I can well understand why the business community is not so hot on the Green Party. They're by far the most business unfriendly party in the NZ Parliament, though I think that reputation is somewhat overblown. So it's not at all outside the realms of possibility that the Media, being a business itself, would spin falsehoods against the Green's policies.&lt;/p&gt;
+&lt;p&gt;Really, that's what the story of Understanding Power is all about. Western Media, being a business, and beholden to business, seeks to further the cause of business by whatever means. This of course means that those whose opinions fall outside the orthodoxy don't tend to get coverage (apart from the odd token dissident for appearances sake), and as such any Politician who wishes to succeed must also eventually end up toeing the line. After all, I've just been saying that the Green's policies aren't really so different from everyone elses, of course they have to be, or else they would be taken even less seriously, and would never have gained their current status if they hadn't moderated their message.&lt;/p&gt;&lt;/div&gt;</description><category>Politics</category><guid>https://davidbeath.com/posts/narratives-in-the-media.html</guid><pubDate>Fri, 08 Nov 2013 08:47:09 GMT</pubDate></item><item><title>Reading XBee RSSI with Arduino</title><link>https://davidbeath.com/posts/reading-xbee-rssi-with-arduino.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;Last year I spent quite a lot of time trying to read the &lt;a href="http://en.wikipedia.org/wiki/Received_signal_strength_indication"&gt;Recieved Signal Strength Indicator&lt;/a&gt; from an XBee for a project I was working on. I had planned to blog about the process, but never got round to writing any more than two posts. However, I had a look at the nascent blog for the first time in a while, and it surprised me that it was getting a respectable number of views, especially for something that wasn't particularly informative and hadn't been updated in so long. Having a look at the analytics, I realised that like I been doing, there are still a lot of people trying to figure out how to read RSSI from an XBee to an Arduino. So here's a tutorial and some pointers for getting XBees set up for signal strength reading.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;p&gt;The first thing you're going to need is of course a couple of &lt;a href="http://en.wikipedia.org/wiki/XBee"&gt;XBee&lt;/a&gt; units. You'll also need an XBee usb connector like &lt;a href="https://www.sparkfun.com/products/8687"&gt;this&lt;/a&gt; to configure them from your computer. For this tutorial I'll explain how to read the signal strength with an &lt;a href="http://www.arduino.cc"&gt;Arduino&lt;/a&gt;, though you can just use a PC. &lt;/p&gt;
+&lt;p&gt;&lt;em&gt;PLEASE NOTE&lt;/em&gt;: Unless you want to set up a &lt;a href="http://en.wikipedia.org/wiki/Wireless_mesh_network"&gt;Wireless mesh network&lt;/a&gt;, you should use the &lt;a href="http://www.digi.com/products/wireless-wired-embedded-solutions/zigbee-rf-modules/point-multipoint-rfmodules/xbee-series1-module"&gt;XBee 802.15.4&lt;/a&gt; modules, also known as the Series 1 modules. The Series 1 operates a standard point to point network. The Series 2 modules, the &lt;a href="http://www.digi.com/products/wireless-wired-embedded-solutions/zigbee-rf-modules/zigbee-mesh-module/xbee-zb-module"&gt;XBee ZB&lt;/a&gt;, use the ZigBee mesh protocol. Because of this, they do not include RSSI information in the packet, and anyway, the RSSI is only good for the last hop. Make sure you know your required use-case before ordering these modules. &lt;em&gt;You have been warned.&lt;/em&gt;&lt;/p&gt;
+&lt;h3&gt;XBee Configuration&lt;/h3&gt;
+&lt;p&gt;Before doing anything with your XBees, read this list of &lt;a href="http://www.faludi.com/projects/common-xbee-mistakes/"&gt;common XBee mistakes&lt;/a&gt;. It will save you a lot of time wondering why things aren't working as they should. I also recommend you read the official &lt;a href="http://ftp1.digi.com/support/documentation/90002160_A.pdf"&gt;Getting Started Guide&lt;/a&gt;, and consult the &lt;a href="http://ftp1.digi.com/support/documentation/90000982_M.pdf"&gt;Product Manual&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;In order to configure your XBees, by far the easiest way is to use &lt;a href="http://www.digi.com/support/productdetail?pid=3352"&gt;X-CTU&lt;/a&gt;. Unfortunately this only runs on Windows, though it may be possible to get it working with WINE in Linux. For very basic instructions on how to use X-CTU, look &lt;a href="http://examples.digi.com/get-started/configuring-xbee-radios-with-x-ctu/"&gt;here&lt;/a&gt;. Alternatively, you check out the instructions &lt;a href="http://examples.digi.com/get-started/basic-xbee-802-15-4-chat/3/"&gt;here&lt;/a&gt; on how to configure them from a terminal.&lt;/p&gt;
+&lt;p&gt;Getting the XBees talking to each other should be a fairly simple matter. You'll want the &lt;em&gt;PAN ID&lt;/em&gt; and &lt;em&gt;Channel&lt;/em&gt; settings to be the same on each XBee you're using, and of course the &lt;em&gt;MY&lt;/em&gt; address should be unique to each XBee. If you're using only two XBees to talk to each other, then set the &lt;em&gt;Destination address high&lt;/em&gt; to &lt;code&gt;0&lt;/code&gt; and the &lt;em&gt;Destination low&lt;/em&gt; address to the &lt;em&gt;MY&lt;/em&gt; address of the other XBee. Otherwise, if you're wanting to broadcast to all XBees listening on the same &lt;em&gt;Channel&lt;/em&gt; and &lt;em&gt;PAN ID&lt;/em&gt;, then set the &lt;em&gt;Destinaton high&lt;/em&gt; address to &lt;code&gt;0&lt;/code&gt;, and the &lt;em&gt;Destination low&lt;/em&gt; address to &lt;code&gt;FFFF&lt;/code&gt; to enable broadcast mode.&lt;/p&gt;
+&lt;p&gt;The final setting is to change the &lt;em&gt;API Enable&lt;/em&gt; setting to "2", which will allow the Arduino to control the XBee using API commands.&lt;/p&gt;
+&lt;h3&gt;Arduino Configuration&lt;/h3&gt;
+&lt;p&gt;I'm going to assume that if you're reading this tutorial, then you already have a basic understanding of Arduino code, and how to use them. You'll need to download the &lt;a href="http://code.google.com/p/xbee-arduino/"&gt;xbee-arduino&lt;/a&gt; library and put it in your Arduino library folder.&lt;/p&gt;
+&lt;p&gt;In your Arduino code include and intitialise the xbee-arduino library.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;#include &amp;lt;XBee.h&amp;gt;
+
+XBee xbee = XBee()
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Then the start the serial connection to the XBee and computer in setup.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;void setup()
+{
+    // XBee serial connection
+    xbee.begin(9600);
+
+    // Computer serial connection
+    Serial.begin(9600);
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;For the purposes of this tutorial, we're going to have one XBee send a packet, and the other read the packet and output the RSSI value. You can have the sending XBee just send from a terminal, and use only one Arduino for receiving, but I'm going to show the code for having both XBees attached to an Arduino. The code about applies to both sender and receiver.&lt;/p&gt;
+&lt;h4&gt;Sending Packets&lt;/h4&gt;
+&lt;p&gt;On your sending XBee/Arduino, before the setup, initialise the payload. You can of course change the payload anywhere within the loop. I'm going to set the payload to "Hi".&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;uint_8 payload[] = { 'H', 'i' };
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Then specify the destination address that you're going to send to. This is the &lt;em&gt;Serial High&lt;/em&gt; and &lt;em&gt;Serial Low&lt;/em&gt; address of the recieving XBee. If you're broadcasting, then you can skip this step.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;XBeeAddress64 addr64 = XBeeAddress64(0x0013a200, 0x403e0f30);
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;In this example, because we're not dealing with sending updated data, we can create the transmit request in setup. The &lt;em&gt;Tx64Request&lt;/em&gt; takes three parameters; the address it's being sent to, the payload, and the size of the payload. If you're broadcasting, then change the address parameter to &lt;code&gt;0xFFFF&lt;/code&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Tx64Request tx64 = Tx64Request(addr64, payload, sizeof(payload));
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Finally, in your loop, send the packet. I'm going to set it to send every 50 milliseconds.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;void loop()
+{
+    xbee.send(tx64);
+    delay(50);
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Receiving Packets and reading RSSI&lt;/h4&gt;
+&lt;p&gt;On your receiver, before setup, you'll first need to initialise a Response object.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Rx64Response rx64 = Rx64Response();
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;In the loop, your XBee will first wait for an incoming packet. The value within the brackets specifies how long it shoud continue waiting before continuing through the loop. For this example, because we're only doing the one thing, listening for and reading the signal strength of a packet, we can afford to wait a while.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;xbee.readPacket(100);
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Once a packet is received, in order to prevent errors we first check if the response is available, then check if it matches the response type we want. Only then do we actually read the packet.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;// Check if available
+if (xbee.getResponse().isAvailable())
+{
+    // Check if packet is correct type
+    if (xbee.getResponse.getApiId() == RX_64_RESPONSE)
+    {
+        // Read the packet
+        xbee.getResponse().getRx64Response(rx64);
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now you can read the signal strength from the packet and send it to the computer. If you don't want to print out the previous RSSI value every time through the loop whenever a packet isn't received (which you shouldn't), then this code should go within your &lt;em&gt;if&lt;/em&gt; statements immediately after you've read the packet.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Serial.print( rx64.getRSSI() );
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;And if you want to print out the payload:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Serial.print( rx64.getData() );
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Final Code&lt;/h4&gt;
+&lt;p&gt;Your code for the sender should look something like this:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;#include &amp;lt;XBee.h&amp;gt;
+
+XBee xbee = XBee()
+
+uint_8 payload[] = { 'H', 'i' };
+
+XBeeAddress64 addr64 = XBeeAddress64(0x0013a200, 0x403e0f30);
+
+Tx64Request tx64 = Tx64Request(addr64, payload, sizeof(payload));
+
+void setup()
+{
+    xbee.begin(9600);
+}
+
+void loop()
+{
+    xbee.send(tx64);
+    delay(50);
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;And the code for the receiver something like this:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;#include &amp;lt;XBee.h&amp;gt;
+
+XBee xbee = XBee()
+
+Rx64Response rx64 = Rx64Response();
+
+void setup()
+{
+    xbee.begin(9600);
+    Serial.begin(9600);
+}
+
+void loop()
+{
+    xbee.readPacket(100);
+    if (xbee.getResponse().isAvailable())
+    {
+        if (xbee.getResponse().getApiId() == RX_64_RESPONSE)
+        {
+            xbee.getResponse().getRx64Response(rx64);
+            Serial.print( rx64.getRSSI() );
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;You should now have a couple of XBees that are talking to each other, and can read the signal strength of the packets. For a full example of working code, where a whole bunch of senders broadcast to multiple receivers, which then send the data to an aggregator, check out my &lt;a href="https://github.com/DBeath/rssi-aggregator"&gt;Github repository&lt;/a&gt;.&lt;/p&gt;&lt;/div&gt;</description><category>IT</category><category>tutorial</category><category>Arduino</category><category>XBee</category><category>RSSI</category><guid>https://davidbeath.com/posts/reading-xbee-rssi-with-arduino.html</guid><pubDate>Fri, 11 Oct 2013 01:47:53 GMT</pubDate></item><item><title>Installing Tiny Tiny RSS from scratch</title><link>https://davidbeath.com/posts/installing-tiny-tiny-rss-from-scratch.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;Considering that a couple of times now I've been a proponent of using an RSS reader, I figured it was time I wrote a tutorial on how to install &lt;a href="http://tt-rss.org/redmine/projects/tt-rss/wiki"&gt;Tiny Tiny RSS&lt;/a&gt;, using &lt;a href="http://nginx.org/"&gt;Nginx&lt;/a&gt; as the server and &lt;a href="http://www.postgresql.org/"&gt;PostgreSQL&lt;/a&gt; for the database. While as with any piece of software there are a number of tutorials and guides already out there, I've found that none of them provided a complete instruction set that didn't have me running into and searching for solutions to multiple errors. To that end, this tutorial aims to both provide as complete a set of fool-proof instructions as I can make, both for newbies to self-hosting, and simply as a reference for my future self should I need to do this again.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;p&gt;This set of instructions assumes that you're running a Debian based Linux distro. I've tested this setup on a clean Ubuntu Server 12.04 virtual machine, and the settings are roughly the same as I'm using on my Debian server. It's assumed that you either know how to set up a server already, or are capable of reading a tutorial to do so (If not, then why are you reading this? Go use &lt;a href="http://cloud.feedly.com/"&gt;Feedly&lt;/a&gt;). There are some very good tutorials at &lt;a href="https://www.digitalocean.com/community/"&gt;Digital Ocean&lt;/a&gt; and &lt;a href="https://library.linode.com/"&gt;Linode&lt;/a&gt;, and I'd recommend either of them for hosting purposes.&lt;/p&gt;
+&lt;h3&gt;Installation&lt;/h3&gt;
+&lt;p&gt;On to the install. While not strictly necessary, the first thing I recommend is to make sure that your server is using the correct time, so install ntp to keep the system clock updated.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install ntp
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;For most of the commands in this tutorial you'll need super user privileges, so you can either run them as root (not recommended) or use &lt;code&gt;sudo&lt;/code&gt; like I've used in this tutorial. 
+You'll also need to edit a bunch of files in a text editor. I've used &lt;code&gt;nano&lt;/code&gt; for this tutorial because it's easier to use and you can just copy the commands straight, but I usually use &lt;code&gt;vim&lt;/code&gt;.&lt;/p&gt;
+&lt;h3&gt;PHP&lt;/h3&gt;
+&lt;p&gt;Unfortunately, despite the fact that PHP &lt;a href="http://me.veekun.com/blog/2012/04/09/php-a-fractal-of-bad-design/"&gt;sucks&lt;/a&gt; (seriously, read the article, even if you disagree it's an interesting read), Tiny Tiny RSS is built with PHP. However, just because a language sucks doesn't mean that programs written in it necessarily have to, and tt-rss is the best of the self-hosted RSS readers. Still, that means you're going to have to install PHP, and get it working nicely with Nginx.&lt;/p&gt;
+&lt;p&gt;Install PHP 5 and the components necessary to get it playing nicely with everything else.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install php5 php5-fpm php5-curl php5-pgsql php5-gd php5-mcrypt php5-cli
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;There's one line in php.ini you'll need to change, which will prevent a possible &lt;a href="http://wiki.nginx.org/Pitfalls#Passing_Every_.7E_.5C.php.24_request_to_to_PHP"&gt;security issue&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo nano /etc/php5/fpm/php.ini
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Change this line:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;    cgi.fix_pathinfo=1
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;To this:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;    cgi.fix_pathinfo=0
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The other change is to make PHP-FPM listen on a UNIX socket rather than a TCP socket.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo nano /etc/php5/fpm/pool.d/www.conf
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Change the line:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;listen = 127.0.0.1:9000
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;To:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;listen = /var/run/php5-fpm.sock
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Finally, restart PHP.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo /etc/init.d/php5-fpm restart
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Nginx&lt;/h3&gt;
+&lt;p&gt;Now that PHP is configured, you'll want to configure Nginx. There's a very good &lt;a href="http://blog.martinfjordvald.com/2010/07/nginx-primer/"&gt;primer&lt;/a&gt; by Martin Fjordvald on the basics of Nginx configuration which you can read to get an understanding of what's going on. If you want to dig deeper for various other settings, the &lt;a href="http://nginx.org/en/docs/"&gt;documentation&lt;/a&gt; for Nginx is quite thorough.&lt;/p&gt;
+&lt;p&gt;This tutorial is going to have you build Nginx from source, since the .deb packages are not always up to date. It's really not that much harder than setting it up from a package install anyway.&lt;/p&gt;
+&lt;p&gt;First, install the packages required to compile the source. &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install gcc make libpcre3-dev openssl libssl-dev
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;I also prefer to have Nginx use a dedicated system account with no login or password access for a bit of extra security.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo adduser --system --no-create-home --disabled-login --disabled-password --group nginx
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Then download and unpack the latest Nginx version.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;wget http://nginx.org/download/nginx-1.5.6.tar.gz
+
+tar -xzvf nginx-1.5.6.tar.gz
+
+cd nginx-1.5.6
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The configure command sets the parameters for the build. This is where you can change the default install directory and the different modules that Nginx uses. Nginx doesn't allow you to change modules without rebuilding, so you'll need to select or deselect any modules here. The only module I'll add is the http_ssl module, which will allow you to add SSL to your site later if you wish. I also prefer to just use the default install directory, so I won't change that, but I'll set the user and group Nginx uses to the one I created earlier.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;./configure --user=nginx --group=nginx --with-http_ssl_module
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now we can build and install Nginx.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;make &amp;amp;&amp;amp; sudo make install
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h4&gt;Nginx Configuration&lt;/h4&gt;
+&lt;p&gt;Change to the directory you installed Nginx to:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;cd /usr/local/nginx
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;There are various methods people use for controlling the sites on their server. The .deb install uses a &lt;code&gt;sites-enabled&lt;/code&gt; and &lt;code&gt;sites-disabled&lt;/code&gt; style configuration, but since I don't have many sites on my server, I prefer to keep each site configuration file in the conf/ folder, and include each one manually in nginx.conf.&lt;/p&gt;
+&lt;p&gt;So, for this tutorial, we'll create a ttrss.conf file.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo nano conf/ttrss.conf
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;My ttrss.conf looks something like this (except I have SSL enabled):&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;# Tiny Tiny RSS Configuration
+
+server {
+    listen 80;
+    server_name domainname www.domainname;
+
+    root /var/www/ttrss;
+    index index.php;
+
+    error_log /var/log/nginx/ttrss.error.log;
+    access_log /var/log/nginx/ttrss.access.log;
+
+    location / {
+        try_files $uri $uri/ /index.php;
+    }
+
+    location ~ \.php$ {
+        include fastcgi.conf; # don't use fastcgi_params
+        fastcgi_pass unix:/var/run/php5-fpm.sock;
+        fastcgi_index index.php;
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;A brief primer: &lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;em&gt;listen&lt;/em&gt;: the port that the server listens for incoming connections on.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;server_name&lt;/em&gt;: the FQDN (fully qualified domain name) that the server uses for this connection. I set this to listen on both example.com and www.example.com.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;root&lt;/em&gt;: the root directory that the site's files are located at.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;index&lt;/em&gt;: the index file that the server directs traffic to. In this case you only need index.php, but can also include index.html or .htm, or any other file you want to use as a homepage.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;error_log&lt;/em&gt;: the location of the error log for this site.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;access_log&lt;/em&gt;: the location of the access log for this site.
+The first location block accepts all incoming requests:&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;try_files&lt;/em&gt;: this just makes the URL search engine friendly. Not really necessary in this case, but it doesn't hurt.
+The second location block catches all incoming php requests:&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;include fastcgi.conf&lt;/em&gt;: this file comes with Nginx and includes all the parameters for using fastcgi. It's almost the same as fastcgi_params, but you'll have issues using fastcgi_params in Ubuntu 12.04, unless you include the line &lt;code&gt;SCRIPT_FILENAME $document_root$fastcgi_script_name&lt;/code&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;fastcgi_pass&lt;/em&gt;: the socket that fastcgi passes requests through.&lt;/li&gt;
+&lt;li&gt;&lt;em&gt;fastcgi_index&lt;/em&gt;: the index file that fastcgi uses.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Next, you'll need to edit nginx.conf.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo nano conf/nginx.conf
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The only change that you really need to make to this file is to add the line &lt;code&gt;include ttrss.conf&lt;/code&gt; in the http block, but this is my recommended configuration below.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;# Nginx Configuration
+
+user nginx nginx;
+worker_processes auto; # optimal value is number of cpu cores
+
+error_log /var/log/nginx/error.log
+
+events {
+    worker_connections 2048;
+}
+
+http {
+# Virtual Host Configuration
+    include ttrss.conf;
+
+# Basic Settings
+    include mime.types;
+    default_type application/octet-stream;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay off;
+
+    client_header_timeout 20s;
+    client_body_timeout 20s;
+    send_timeout 20s;
+
+    # Disable Nginx version number in error pages and Server header
+    server_tokens off;
+
+    # Silently block all undefined vhost access
+    server {
+        server_name _;
+        return 444;
+    }
+
+# Gzip Settings
+    gzip on;
+    gzip_disable "msie6";
+
+    gzip_comp_level 5;
+    gzip_min_length 256;
+
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_types *;
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Finally, start Nginx.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo /usr/local/nginx/sbin/nginx
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;If you need to make any changes to Nginx after it's been started, just open and change the config files. Then run this command to reload the Nginx with the new configuration.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo /usr/local/nginx/sbin/nginx -s reload
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Postgres&lt;/h3&gt;
+&lt;p&gt;Tiny Tiny RSS recommends using &lt;a href="http://www.postgresql.org/"&gt;PostgreSQL&lt;/a&gt; over MySQL for the database, as PostgreSQL is slightly faster. For a single user, it probably wouldn't make much difference, depending on how many feeds you have. The instructions for installing PostgreSQL are mostly taken from the Ubuntu community wiki &lt;a href="https://help.ubuntu.com/community/PostgreSQL"&gt;here&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Install PostgreSQL.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo apt-get install postgresql
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Log in to the postgres command line as user postgres.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo -u postgres psql postgres
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Change the password for the postgres user. Type in the command below, hit enter, then enter as password. Make sure to save all your passwords in a good password manager somewhere. I recommend &lt;a href="http://keepass.info/"&gt;KeePass&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;\password postgres
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;While you're still in the postgres command line, create a database and database user for tt-rss. The password must be entered surrounded by single quotes.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;postgres=# CREATE USER ttrss WITH PASSWORD 'password';
+
+postgres=# CREATE DATABASE ttrssdb;
+
+postgres=# GRANT ALL PRIVILEGES ON DATABASE ttrssdb to ttrss;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Exit the postgres command line.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;\q
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;From this point, you might be able to get tt-rss to access the database, but I wasn't until I edited a line in the postgresql config to allow access.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo nano /etc/postgresql/9.1/main/pg_hba.conf
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Add this line to allow tt-rss to use the database:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;local all ttrss md5
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now restart PostgreSQL.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo service postgresql restart
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Tiny Tiny RSS&lt;/h3&gt;
+&lt;p&gt;Finally, it's now time to install Tiny Tiny RSS itself. Yeah, I know it takes a while to get here. I assure you, it's worth it in the end, and you shouldn't have to worry about it much at all once you've got it properly set up. The installation instructions for tt-rss can be be found &lt;a href="http://tt-rss.org/redmine/projects/tt-rss/wiki/InstallationNotes"&gt;here&lt;/a&gt;, but once again they seem somewhat incomplete.&lt;/p&gt;
+&lt;p&gt;First, make a directory for tt-rss to be served from. This should be the same as the directory you specified as root in your ttrss.conf file for Nginx.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo mkdir -p /var/www/ttrss
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;You'll need to set the owner of the directory to the user that you're installing and running tt-rss as.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo chown -R user:group /var/www/
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now change to the directory above.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;cd /var/www
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Download and extract the latest version of Tiny Tiny RSS.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;wget https://github.com/gothfox/Tiny-Tiny-RSS/archive/1.10.tar.gz
+
+tar -xzvf 1.10.tar.gz
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Rename the extracted directory so that it matches the root directory you specified earlier, then open the directory.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;mv Tiny-Tiny-RSS-1.10/ ttrss
+
+cd /var/www/ttrss
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The following folders need to have their permissions changed to be writable by anyone with an account on the system, or tt-rss won't be able to save files there.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo chmod -R 777 cache/images/ cache/js/ cache/export/ cache/upload/ feed-icons/ lock/
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now you should be able to navigate in your browser to the site that you are hosting tt-rss from. This should be the same as the server_name you specified in ttrss.conf. If you installed tt-rss into a sub-folder of the domain, then the address will be &lt;code&gt;http://domainname/ttrss/&lt;/code&gt;. If you got the configuration correct, you should see the Tiny Tiny RSS install page.&lt;/p&gt;
+&lt;p&gt;The installation page will have a few fields to enter. These will be the credentials for tt-rss to use the database, as well as the full URL that you'll access tt-rss from. Once you've entered the database details, click the 'Test Configuration' button. If there are errors, you'll get a message saying so, and it shouldn't be too hard to figure out what to do from there. If it's good to go, you'll see a text box with a lot of configuration lines. Copy that config data to your clipboard, and then into a config file on your server with:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;sudo nano /var/www/ttrss/config.php
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Save that file, and reload tt-rss in your browser. You should now be able to login with the default user &lt;code&gt;admin&lt;/code&gt; and password &lt;code&gt;password&lt;/code&gt;. Once you're logged in, change the admin settings in the preferences at top right.&lt;/p&gt;
+&lt;p&gt;The final required step is to set up automatic updating of your feeds. You can skip this, but you'll have to manually click on each feed to check for updates if you don't. The &lt;a href="https://www.gnu.org/software/screen/"&gt;screen&lt;/a&gt; command will permanently run feed updates in the background, defaulting to once every 30 minutes. &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;screen -d -m php ./update_daemon2.php
+&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;Conclusion&lt;/h3&gt;
+&lt;p&gt;You should now have a working installation of Tiny Tiny RSS on your server, accessible from anywhere in the world. If you've used RSS Readers before, you can import your feeds from an OPML file, otherwise, find some good blogs and start adding feeds.&lt;/p&gt;&lt;/div&gt;</description><category>RSS</category><category>IT</category><category>servers</category><category>tutorial</category><category>hosting</category><category>Web</category><category>Nginx</category><guid>https://davidbeath.com/posts/installing-tiny-tiny-rss-from-scratch.html</guid><pubDate>Wed, 02 Oct 2013 03:43:39 GMT</pubDate></item><item><title>Typography: New Style and Fonts</title><link>https://davidbeath.com/posts/typography-new-style-and-fonts.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;I've spent a few hours over the last few days reading &lt;a href="http://practicaltypography.com"&gt;Butterick's Practical Typography&lt;/a&gt;, which I felt might be a good idea considering that I enjoyed his rant about Web Design that I posted a while back. I feel that in some ways I damn myself as the worst (or best, depending on how twisted your perceptions are) type of geek for being interested in and recommending a book on the intricacies of typography. Though really, much as there is on the site, it's still only a primer, and I don't think I'm going to go much farther down the rabbit hole than this.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;p&gt;The further I read through the book, the more little details in my site started to annoy me a bit. As a result, I've spent even more hours slowly and meticulously changing the styling and fonts of this blog. The changes are relatively minor, but while you won't be able to do a direct comparison, as obviously I've already updated the site, I assure you they make a big difference in the quality of this site's appearance.&lt;/p&gt;
+&lt;p&gt;The biggest difference comes simply from changing the font. While I'm still using the &lt;a href="http://foundation.zurb.com"&gt;Foundation framework&lt;/a&gt;, I've changed the font from it's trusty default, &lt;a href="http://en.wikipedia.org/wiki/Helvetica#Neue_Helvetica_.281983.29"&gt;Helvetica Neue&lt;/a&gt;, to &lt;a href="http://practicaltypography.com/charter.html"&gt;Charter&lt;/a&gt;. Ordinarily I've always tended to use Sans-Serif fonts whenever I've actually thought about it and gone beyond the default Times New Roman or Arial in my writing, but this time I figured a good Serif font looks more professional and easier to read. A serif font also allows for better use of &lt;em&gt;emphasis&lt;/em&gt;. Doing side by side comparisons between the old and new versions of my site, I find Helvetica Neue to be slightly blurry to my eyes, while Charter looks relatively crisp and sharp.&lt;/p&gt;
+&lt;p&gt;For code blocks I've switched from the default css monospace to &lt;a href="http://levien.com/type/myfonts/inconsolata.html"&gt;Inconsolata&lt;/a&gt;.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;def helloworld():
+    print "Hello World"
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;It's a nicely legible monospace font, and quite importantly when it comes to code, makes it very easy to distinguish between characters such as &lt;code&gt;O&lt;/code&gt; and &lt;code&gt;0&lt;/code&gt;. While any good font will do this, it's especially important in a monospace font when you're reading code, and trying to figure out what character you're dealing with at a quick glance. Witness the relatively subtle difference between O and 0 in Charter. While the capital O is slightly wider than the number 0, it can be confusing in the absence of other references. The strikethrough in Inconsolata's zero makes the difference clear. Many fonts have the same issue between capital I and lowercase l as well. Most monospace fonts take pains to make these differences plain, so it largely comes down to a matter of personal preference.&lt;/p&gt;
+&lt;p&gt;One small change that makes a big difference is increasing the whitespace by slightly separating the lines with the line-height value. This separation just makes each line a little more distinct and less cramped feeling, making for easier reading. I also increased the margins a touch around the code in the code blocks, making the code stand out a little more, and combined with the line-height change makes the code in my previous post stand out nicely.&lt;/p&gt;
+&lt;p&gt;Finally with the typography changes, centering the titles of each post provides a clearer visual indication of the start of a new post. It also makes the difference between the title of a post and the subheadings stand out more, especially if I should want to start a new post with a subheading, or have one after a single paragraph. &lt;/p&gt;
+&lt;p&gt;The last little change I've made is to include a couple of cool little icons from &lt;a href="http://fortawesome.github.io/Font-Awesome/"&gt;Font Awesome&lt;/a&gt;. I always wanted an RSS icon on my RSS feed button, and now I have one. There are also icons for the links on my About page, which I really should update with a bit more info sometime.&lt;/p&gt;
+&lt;p&gt;One final point: If you're still reading this far, you'll hopefully be wondering what the hell I'm talking about fonts and spacing for, because you should be reading this in a proper RSS reader, and all my typography has been stripped out. I'll forgive you if this is your first time visiting, or you've come from a link posted somewhere. Otherwise, go be a good geek and learn how to host and run &lt;a href="http://tt-rss.org/redmine/projects/tt-rss/wiki"&gt;Tiny Tiny RSS&lt;/a&gt;, or if you're not into self hosting, then I recommend &lt;a href="http://feedly.com"&gt;Feedly&lt;/a&gt;. And if you're into Web Design, do any typing or publishing, or need to write a résumé, then read &lt;a href="http://practicaltypography.com"&gt;Practical Typography&lt;/a&gt;.&lt;/p&gt;&lt;/div&gt;</description><category>typography</category><category>fonts</category><category>RSS</category><category>Web</category><category>Design</category><guid>https://davidbeath.com/posts/typography-new-style-and-fonts.html</guid><pubDate>Wed, 25 Sep 2013 00:51:40 GMT</pubDate></item><item><title>Using Node Modules with Meteor</title><link>https://davidbeath.com/posts/using-node-modules-with-meteor.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;After playing with &lt;a href="http://meteor.com"&gt;Meteor&lt;/a&gt; for the past week or so, which overall I really enjoyed, the one thing that really bugged me was how to use &lt;a href="http://nodejs.org"&gt;node.js&lt;/a&gt; modules in a Meteor app. There are plenty of instructions out there that sort of tell you what to do, but I found all of them to be variously confusing and unclear. Of course, this isn't helped by the fact that at the time of writing Meteor is only version 0.6.5.1, so things are still in flux. The aim of this post is therefore to provide a comprehensive and clear guide to how I was able to get Meteor to work with Node modules.&lt;/p&gt;
+&lt;!-- TEASER_END --&gt;
+
+&lt;p&gt;The first thing of course is to initialise a new Meteor app. Feel free to skip this step if you're using an existing one.  &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;meteor create myapp
+cd myapp
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Then create a folder called "packages" within the root of your app.   &lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;mkdir packages &amp;amp;&amp;amp; cd packages
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;For each node module or custom package you want to use, create a new folder. For this example I'm going to use &lt;a href="https://github.com/danmactough/node-feedparser"&gt;feedparser&lt;/a&gt;, as that's what I was using.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;mkdir feedparser &amp;amp;&amp;amp; cd feedparser
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;You'll then want to create two javascript files, one called package.js, and the other the name of the module.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;touch package.js
+touch feedparser.js
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;In package.js, declare the module you want to use, making sure to specify the version like so:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Package.describe({
+    summary: "Reads RSS feeds"
+});
+Npm.depends({feedparser: "0.16.1"});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Next, add the following lines, or the equivalent for your requirements, to package.js. You can find more information about what you can do here in the Meteor documentation, and by looking at the &lt;a href="https://github.com/meteor/meteor/tree/master/packages/"&gt;packages directory in the Meteor source tree&lt;/a&gt;. For me, these lines were what I required to access the module within my Meteor app.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Package.on_use(function(api){
+    api.add_files('feedparser.js', 'server');
+    if(api.export)
+        api.export('Feedparser');
+});
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now, just create your variable to export by calling &lt;code&gt;Npm.require()&lt;/code&gt; on it in the other .js file you created.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;Feedparser = Npm.require('feedparser');
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Finally, in your application root folder, add the package to your app:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;meteor add feedparser
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Now Meteor will update the dependencies for the package. Once this is done, you should be able to use the module within your app by calling the api you exported.&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;var parser = Feedparser;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Hopefully now you'll have a working Node module within your Meteor app. You can view the full code for this example &lt;a href="https://github.com/DBeath/meteor-rss/"&gt;here&lt;/a&gt;. If you know a better or easier way to do this, or a more proper way, then please email me to say so.&lt;/p&gt;&lt;/div&gt;</description><category>nodejs</category><category>Meteor</category><category>tutorial</category><guid>https://davidbeath.com/posts/using-node-modules-with-meteor.html</guid><pubDate>Fri, 20 Sep 2013 09:52:15 GMT</pubDate></item><item><title>Web Design: A good rant</title><link>https://davidbeath.com/posts/web-design-a-good-rant.html</link><dc:creator>David Beath</dc:creator><description>&lt;div&gt;&lt;p&gt;A &lt;a href="http://unitscale.com/mb/bomb-in-the-garden/"&gt;really interesting talk&lt;/a&gt; by Matthew Butterick about the state of Web Design. &lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;It’s now or nev­er for the web. The web is a medi­um for cre­ators, in­clud­ing de­sign­ers. But af­ter 20 years, the web still has no cul­ture of de­sign ex­cel­lence. Why is that? Because de­sign ex­cel­lence is in­hib­it­ed by two struc­tur­al flaws in the web. First flaw: the web is good at mak­ing in­for­ma­tion free, but ter­ri­ble at mak­ing it ex­pen­sive. So the web has had to rely large­ly on an ad­ver­tis­ing econ­o­my, which is weak­en­ing un­der the strain. Second flaw: the process of adopt­ing and en­forc­ing web stan­dards, as led by the W3C, is hope­less­ly bro­ken. Evidence of both these flaws can be seen in a) the low de­sign qual­i­ty across the web, and b) the speed with which pub­lish­ers, de­vel­op­ers, and read­ers are mi­grat­ing away from the web, and to­ward app plat­forms and me­dia plat­forms. This ev­i­dence strong­ly sug­gests that the web is on its way to be­com­ing a sec­ond-class plat­form. To ad­dress these flaws, I pro­pose that the W3C be dis­band­ed, and that the lead­er­ship of the web be re­or­ga­nized around open-source soft­ware prin­ci­ples. I also en­cour­age de­sign­ers to ad­vo­cate for a bet­ter web, lest they find them­selves confined to a shrink­ing ter­ri­to­ry of possibilities.&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;I really sympathise with his views on this. The design of most major websites is crap. Unfortunately, he's correct in his assertion that this is largely to do with the fact that advertising drives most of the web. It's going to take a lot of work to find ways around this.&lt;/p&gt;
+&lt;p&gt;As I'm currently working on plans for my new idea for a useful site, so this kind of thing is something that I'm doing a lot of thinking about lately. It's so easy to just copy the base format that most sites use without thinking about whether that design is the best for your current situation.&lt;/p&gt;&lt;/div&gt;</description><category>IT</category><category>Web</category><category>Design</category><guid>https://davidbeath.com/posts/web-design-a-good-rant.html</guid><pubDate>Sun, 15 Sep 2013 10:00:48 GMT</pubDate></item></channel></rss>

@@ -12,9 +12,29 @@ module.exports.createScanner = function (options) {
 
 function FeedScanner(options) {
   this.charset = options.charset || 'utf-8';
+  this.feeds = [];
 };
 
 util.inherits(FeedScanner, events.EventEmitter);
+
+// Adds an array of feeds to the feeds list
+FeedScanner.prototype.addFeeds = function (feeds, callback) {
+  feeds.forEach(function (item, index, array) {
+    this.feeds.push(item);
+  });
+  return callback(null, 'done');
+};
+
+// Takes an array of feeds and removes each one from the feeds list
+FeedScanner.prototype.removeFeeds = function (feeds, callback) {
+  feeds.forEach(function (item, index, array) {
+    var newIndex = this.feeds.indexOf(item);
+    if (newIndex != -1) {
+      this.feeds.splice(newIndex, 1);
+    };
+  });
+  return callback(null, 'done');
+};
 
 FeedScanner.prototype.fetch = function (feed) {
   if (!validator.isURL(feed)) {
@@ -62,6 +82,7 @@ FeedScanner.prototype.fetch = function (feed) {
   feedparser.on('readable', function () {
     var item;
     while (item = this.read()) {
+      console.log('Got article %s', item.title);
       scanner.emit('article', {
         item: item,
         feed: feed
@@ -83,8 +104,8 @@ function getParams(str) {
 
 function done(err) {
   if (err) {
-    console.log(err +'\n'+ err.stack);
-    return process.exit(1);
+    console.error(err +'\n'+ err.stack);
+    return;
   }
   return console.log('done');
 };

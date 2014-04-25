@@ -12,31 +12,54 @@ module.exports.createScanner = function (options) {
 
 function FeedScanner(options) {
   this.charset = options.charset || 'utf-8';
+  this.interval = options.interval;
   this.feeds = [];
 };
 
 util.inherits(FeedScanner, events.EventEmitter);
 
+FeedScanner.prototype.listFeeds = function () {
+  return this.feeds;
+};
+
 // Adds an array of feeds to the feeds list
 FeedScanner.prototype.addFeeds = function (feeds, callback) {
-  feeds.forEach(function (item, index, array) {
+  feeds.forEach((function (item, index, array) {
     this.feeds.push(item);
-  });
+  }).bind(this));
   return callback(null, 'done');
 };
 
 // Takes an array of feeds and removes each one from the feeds list
 FeedScanner.prototype.removeFeeds = function (feeds, callback) {
-  feeds.forEach(function (item, index, array) {
+  feeds.forEach((function (item, index, array) {
     var newIndex = this.feeds.indexOf(item);
     if (newIndex != -1) {
       this.feeds.splice(newIndex, 1);
     };
-  });
+  }).bind(this));
   return callback(null, 'done');
 };
 
-FeedScanner.prototype.fetch = function (feed) {
+FeedScanner.prototype.scan = function (cb) {
+  this.q = async.queue((function (feed, callback) {
+    this.fetch(feed, function () {
+      callback();
+    });
+  }).bind(this), 20);
+
+  q.drain = function () {
+    console.log('Finished fetching feeds');
+    cb();
+  };
+
+  q.push(this.feeds, function (err) {
+    if (err) return console.error(err);
+    return console.log('Finished processing %s', item);
+  });
+};
+
+FeedScanner.prototype.fetch = function (feed, done) {
   if (!validator.isURL(feed)) {
     return this.emit('error', new Error('Not a valid URL'));
   };
@@ -61,7 +84,6 @@ FeedScanner.prototype.fetch = function (feed) {
     };
 
     resCharset = getParams(res.headers['content-type'] || '').charset;
-    console.log(resCharset);
 
     if (!iconv && resCharset && !charset.match(resCharset)) {
       try {
@@ -82,7 +104,6 @@ FeedScanner.prototype.fetch = function (feed) {
   feedparser.on('readable', function () {
     var item;
     while (item = this.read()) {
-      console.log('Got article %s', item.title);
       scanner.emit('article', {
         item: item,
         feed: feed
@@ -107,5 +128,5 @@ function done(err) {
     console.error(err +'\n'+ err.stack);
     return;
   }
-  return console.log('done');
+  return;
 };

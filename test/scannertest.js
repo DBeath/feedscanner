@@ -4,8 +4,23 @@ var app = require('../app.js');
 var fs = require('fs');
 var path = require('path');
 
+var metaFired = false;
+var articleFired = false;
+var numArticleFired = 0;
+var numMetaFired = 0;
+
 var scanner = app.createScanner({
   charset: 'utf-8'
+});
+
+scanner.on('feed_meta', function (meta) {
+  metaFired = true;
+  numMetaFired += 1;
+});
+
+scanner.on('article', function (data) {
+  articleFired = true;
+  numArticleFired += 1;
 });
 
 describe('scanner', function () {
@@ -17,20 +32,8 @@ describe('scanner', function () {
     }).listen(3000, function () {
       done();
     });
-  });
 
-  it('should emit article event', function (done) {
-    var eventFired = false;
-    scanner.fetch('http://localhost:3000/rss.xml');
 
-    scanner.on('article', function (data) {
-      eventFired = true;
-    });
-
-    setTimeout(function () {
-      expect(eventFired).to.equal(true);
-      done();
-    }, 20);
   });
 
   it('should add feeds to array', function (done) {
@@ -53,5 +56,59 @@ describe('scanner', function () {
       expect(feeds).to.not.include('http://test.com');
       done();
     });
+  });
+
+  it('should remove all feeds from the array', function (done) {
+    expect(scanner.listFeeds().length).to.equal(1);
+    scanner.removeAllFeeds(function () {
+      expect(scanner.feeds.length).to.equal(0);
+      done();
+    });
+  });
+
+  it('should emit article event', function (done) {
+    articleFired = false;
+    numArticleFired = 0;
+
+    scanner.fetch('http://localhost:3000/rss.xml');
+
+    setTimeout(function () {
+      expect(articleFired).to.equal(true);
+      expect(numArticleFired).to.equal(10);
+      done();
+    }, 20);
+  });
+
+  it('should emit meta event', function (done) {
+    metaFired = false;
+    numMetaFired = 0;
+    scanner.fetch('http://localhost:3000/rss.xml');
+
+    setTimeout(function () {
+      expect(metaFired).to.equal(true);
+      expect(numMetaFired).to.equal(1);
+      done();
+    }, 20);
+  });
+
+  it('should emit multiple meta events', function (done) {
+    numMetaFired = 0;
+    scanner.removeAllFeeds(function () {
+      expect(scanner.feeds.length).to.equal(0);
+    });
+    var feedArray = ['http://localhost:3000/rss.xml', 'http://localhost:3000/iconv.xml'];
+    scanner.addFeeds(feedArray, function () {
+      expect(scanner.feeds.length).to.equal(2);
+      expect(scanner.listFeeds()).to.include('http://localhost:3000/rss.xml');
+    });
+
+    scanner.scan(function () {
+      return;
+    });
+
+    setTimeout(function () {
+      expect(numMetaFired).to.equal(2);
+      done();
+    }, 50);
   });
 });

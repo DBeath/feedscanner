@@ -27,7 +27,7 @@ FeedScanner.prototype.addFeeds = function (feeds, callback) {
   feeds.forEach((function (item, index, array) {
     this.feeds.push(item);
   }).bind(this));
-  return callback(null, 'done');
+  return callback();
 };
 
 // Takes an array of feeds and removes each one from the feeds list
@@ -38,28 +38,31 @@ FeedScanner.prototype.removeFeeds = function (feeds, callback) {
       this.feeds.splice(newIndex, 1);
     };
   }).bind(this));
-  return callback(null, 'done');
+  return callback();
 };
 
-FeedScanner.prototype.scan = function (cb) {
-  this.q = async.queue((function (feed, callback) {
-    this.fetch(feed, function () {
-      callback();
-    });
+FeedScanner.prototype.removeAllFeeds = function (callback) {
+  feeds.splice(0, feeds.length+1);
+  return callback();
+};
+
+FeedScanner.prototype.scan = function (callback) {
+  this.q = async.queue((function (feed, donefetch) {
+    this.fetch(feed);
   }).bind(this), 20);
 
-  q.drain = function () {
+  this.q.drain = function () {
     console.log('Finished fetching feeds');
-    cb();
+    return callback();
   };
 
-  q.push(this.feeds, function (err) {
+  this.q.push(this.feeds, function (err) {
     if (err) return console.error(err);
-    return console.log('Finished processing %s', item);
+    return;
   });
 };
 
-FeedScanner.prototype.fetch = function (feed, done) {
+FeedScanner.prototype.fetch = function (feed) {
   if (!validator.isURL(feed)) {
     return this.emit('error', new Error('Not a valid URL'));
   };
@@ -101,6 +104,11 @@ FeedScanner.prototype.fetch = function (feed, done) {
 
   feedparser.on('error', done);
   feedparser.on('end', done);
+
+  feedparser.on('meta', function (meta) {
+    scanner.emit('feed_meta', meta);
+  });
+
   feedparser.on('readable', function () {
     var item;
     while (item = this.read()) {
@@ -124,9 +132,5 @@ function getParams(str) {
 };
 
 function done(err) {
-  if (err) {
-    console.error(err +'\n'+ err.stack);
-    return;
-  }
-  return;
+  if (err) return console.log(err, err.stack);
 };

@@ -10,9 +10,15 @@ module.exports.createScanner = function (options) {
   return new FeedScanner(options);
 };
 
+// Creates a FeedScanner object
+// * charset - the charset to convert feeds to, can be false
+// * scanInterval - how often to scan the feeds, in seconds
+// * concurrent - the number of requests to send at once
 function FeedScanner(options) {
   this.charset = options.charset || 'utf-8';
-  this.interval = options.interval;
+  this.scanInterval = options.scanInterval || 300;
+  this.concurrent = options.concurrent || 20;
+  
   this.feeds = [];
 };
 
@@ -47,18 +53,32 @@ FeedScanner.prototype.removeAllFeeds = function (callback) {
   return callback();
 };
 
+FeedScanner.prototype.startScanning = function () {
+  this.interval = setInterval(this.scan(function () {return;}), this.scanInterval);
+};
+
+FeedScanner.prototype.stopScanning = function () {
+  clearInterval(this.interval);
+  console.log('Finished scanning');
+};
+
 // Fetches all feeds in list
 FeedScanner.prototype.scan = function (concurrent, callback) {
-  var concurrent = concurrent || 20;
+  if (!callback) {
+    var callback = concurrent;
+    var concurrentFeeds = this.concurrent;
+  } else {
+    var concurrentFeeds = concurrent || this.concurrent;
+  };
   var time = process.hrtime();
-
+  console.log('Starting scan of %s feeds', this.feeds.length);
   // The queue function
   var q = async.queue((function (feed, donefetch) {
     this.fetch(feed, function (err) {
       if (err) return donefetch(err);
       return donefetch(null, feed);
     });
-  }).bind(this), concurrent);
+  }).bind(this), concurrentFeeds);
 
   // Called when queue is finished
   q.drain = function () { 
@@ -83,7 +103,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   var scanner = this;
 
   // Sets the request
-  var req = request(feed, {timeout: 5000, pool: false});
+  var req = request(feed, {timeout: 10000, pool: false});
   req.setHeader('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2'+ 
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1944.0 Safari/537.36');
   req.setHeader('accept', 'text/html,application/xhtml+xml');

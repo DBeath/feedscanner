@@ -106,7 +106,7 @@ describe('scanner', function () {
     });
 
     time = process.hrtime();
-    scanner.scan(10, function () {
+    scanner.scan(function () {
       return;
     });
 

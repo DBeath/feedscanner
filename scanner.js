@@ -18,7 +18,7 @@ function FeedScanner(options) {
   this.charset = options.charset || 'utf-8';
   this.scanInterval = options.scanInterval || 300;
   this.concurrent = options.concurrent || 20;
-  
+
   this.feeds = [];
 };
 
@@ -54,7 +54,8 @@ FeedScanner.prototype.removeAllFeeds = function (callback) {
 };
 
 FeedScanner.prototype.startScanning = function () {
-  this.interval = setInterval(this.scan(function () {return;}), this.scanInterval);
+  var intervalMilliseconds = this.scanInterval * 1000;
+  this.interval = setInterval(this.scan(function () {return;}), intervalMilliseconds);
 };
 
 FeedScanner.prototype.stopScanning = function () {
@@ -97,7 +98,7 @@ FeedScanner.prototype.scan = function (concurrent, callback) {
 // Fetches a feed
 FeedScanner.prototype.fetch = function (feed, callback) {
   if (!validator.isURL(feed)) {
-    return this.emit('error', new Error('Not a valid URL'));
+    return this.emit('error', 'Not a valid URL');
   };
   var charset = this.charset;
   var scanner = this;
@@ -117,7 +118,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
     var resCharset;
 
     if (res.statusCode != 200) {
-      this.emit('error', new Error('Bad status code'));
+      this.emit('error', 'Bad status code');
     };
 
     resCharset = getParams(res.headers['content-type'] || '').charset;
@@ -174,5 +175,5 @@ function getParams(str) {
 };
 
 function done(err) {
-  if (err) return err;
+  if (err) console.log(err);
 };

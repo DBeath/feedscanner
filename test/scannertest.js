@@ -1,6 +1,6 @@
 var expect = require('chai').expect;
 var http = require('http');
-var app = require('../app.js');
+var app = require('../scanner.js');
 var fs = require('fs');
 var path = require('path');
 
@@ -8,14 +8,17 @@ var metaFired = false;
 var articleFired = false;
 var numArticleFired = 0;
 var numMetaFired = 0;
+var time;
 
 var scanner = app.createScanner({
   charset: 'utf-8'
 });
 
-scanner.on('feed_meta', function (meta) {
+scanner.on('feed_meta', function (data) {
   metaFired = true;
   numMetaFired += 1;
+  var diff = process.hrtime(time);
+  console.log('%s finished in %d milliseconds', data.feed, diff[1] / 1000000);
 });
 
 scanner.on('article', function (data) {
@@ -32,8 +35,6 @@ describe('scanner', function () {
     }).listen(3000, function () {
       done();
     });
-
-
   });
 
   it('should add feeds to array', function (done) {
@@ -70,25 +71,27 @@ describe('scanner', function () {
     articleFired = false;
     numArticleFired = 0;
 
+    time = process.hrtime();
     scanner.fetch('http://localhost:3000/rss.xml');
 
     setTimeout(function () {
       expect(articleFired).to.equal(true);
       expect(numArticleFired).to.equal(10);
       done();
-    }, 20);
+    }, 50);
   });
 
   it('should emit meta event', function (done) {
     metaFired = false;
     numMetaFired = 0;
+    time = process.hrtime();
     scanner.fetch('http://localhost:3000/rss.xml');
 
     setTimeout(function () {
       expect(metaFired).to.equal(true);
       expect(numMetaFired).to.equal(1);
       done();
-    }, 20);
+    }, 50);
   });
 
   it('should emit multiple meta events', function (done) {
@@ -102,7 +105,8 @@ describe('scanner', function () {
       expect(scanner.listFeeds()).to.include('http://localhost:3000/rss.xml');
     });
 
-    scanner.scan(function () {
+    time = process.hrtime();
+    scanner.scan(10, function () {
       return;
     });
 

@@ -41,35 +41,49 @@ FeedScanner.prototype.removeFeeds = function (feeds, callback) {
   return callback();
 };
 
+// Removes all feeds from list
 FeedScanner.prototype.removeAllFeeds = function (callback) {
   feeds.splice(0, feeds.length+1);
   return callback();
 };
 
-FeedScanner.prototype.scan = function (callback) {
-  this.q = async.queue((function (feed, donefetch) {
-    this.fetch(feed);
-  }).bind(this), 20);
+// Fetches all feeds in list
+FeedScanner.prototype.scan = function (concurrent, callback) {
+  var concurrent = concurrent || 20;
+  var time = process.hrtime();
 
-  this.q.drain = function () {
-    console.log('Finished fetching feeds');
-    return callback();
+  // The queue function
+  var q = async.queue((function (feed, donefetch) {
+    this.fetch(feed, function (err) {
+      if (err) return donefetch(err);
+      return donefetch(null, feed);
+    });
+  }).bind(this), concurrent);
+
+  // Called when queue is finished
+  q.drain = function () { 
+    var diff = process.hrtime(time);
+    console.log('Finished sending feed requests in %dms', diff[1] / 1e6);
+    callback(null, diff);
   };
 
-  this.q.push(this.feeds, function (err) {
+  // Add feeds to queue
+  q.push(this.feeds, function (err, feed) {
     if (err) return console.error(err);
-    return;
+    return console.log('Finished processing %s', feed);
   });
 };
 
-FeedScanner.prototype.fetch = function (feed) {
+// Fetches a feed
+FeedScanner.prototype.fetch = function (feed, callback) {
   if (!validator.isURL(feed)) {
     return this.emit('error', new Error('Not a valid URL'));
   };
   var charset = this.charset;
   var scanner = this;
 
-  var req = request(feed, {timeout: 10000, pool: false});
+  // Sets the request
+  var req = request(feed, {timeout: 5000, pool: false});
   req.setHeader('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2'+ 
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1944.0 Safari/537.36');
   req.setHeader('accept', 'text/html,application/xhtml+xml');
@@ -83,11 +97,12 @@ FeedScanner.prototype.fetch = function (feed) {
     var resCharset;
 
     if (res.statusCode != 200) {
-      return this.emit('error', new Error('Bad status code'));
+      this.emit('error', new Error('Bad status code'));
     };
 
     resCharset = getParams(res.headers['content-type'] || '').charset;
 
+    // If charset is different pipe response through iconv
     if (!iconv && resCharset && !charset.match(resCharset)) {
       try {
         iconv = new IConv(resCharset, charset);   
@@ -106,7 +121,10 @@ FeedScanner.prototype.fetch = function (feed) {
   feedparser.on('end', done);
 
   feedparser.on('meta', function (meta) {
-    scanner.emit('feed_meta', meta);
+    scanner.emit('feed_meta', {
+      meta: meta,
+      feed: feed
+    });
   });
 
   feedparser.on('readable', function () {
@@ -118,6 +136,10 @@ FeedScanner.prototype.fetch = function (feed) {
       });
     };
   });
+
+  if (callback && typeof(callback) === 'function') {
+    callback();
+  };
 };
 
 function getParams(str) {
@@ -132,5 +154,5 @@ function getParams(str) {
 };
 
 function done(err) {
-  if (err) return console.log(err, err.stack);
+  if (err) return err;
 };

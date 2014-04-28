@@ -75,16 +75,29 @@ FeedScanner.prototype.scan = function (concurrent, callback) {
   console.log('Starting scan of %s feeds', this.feeds.length);
   // The queue function
   var q = async.queue((function (feed, donefetch) {
-    this.fetch(feed, function (err) {
-      if (err) return donefetch(err);
-      return donefetch(null, feed);
-    });
+    this.fetch(feed, (function (err, result) {
+      if (err) {
+        this.emit('error', {
+          feed: feed,
+          err: err
+        });
+        console.log('sent error');
+        return donefetch(err);
+      };
+      console.log(feed);
+      this.emit('feed', {
+        feed: feed,
+        meta: result.meta,
+        articles: result.articles
+      });
+      donefetch(null, feed);
+    }).bind(this));
   }).bind(this), concurrentFeeds);
 
   // Called when queue is finished
   q.drain = function () { 
     var diff = process.hrtime(time);
-    console.log('Finished sending feed requests in %dms', diff[1] / 1e6);
+    console.log('Finished sending feed requests in %dms', diff[1] / 1000000);
     callback(null, diff);
   };
 
@@ -97,11 +110,24 @@ FeedScanner.prototype.scan = function (concurrent, callback) {
 
 // Fetches a feed
 FeedScanner.prototype.fetch = function (feed, callback) {
-  if (!validator.isURL(feed)) {
-    return this.emit('error', 'Not a valid URL');
+  function done(err) {
+    //if (err) console.log(err, err.stack);
+    return callback(err);
   };
+
+  if (!validator.isURL(feed)) {
+    return this.emit('error', new Error(feed + ' is not a valid URL'));
+  };
+
+  if (callback && typeof(callback) != 'function') {
+    return callback(new Error('Callback is not a function'));
+  };
+
   var charset = this.charset;
   var scanner = this;
+
+  var feedMeta = null;
+  var articles = [];
 
   // Sets the request
   var req = request(feed, {timeout: 10000});
@@ -139,28 +165,26 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   });
 
   feedparser.on('error', done);
-  feedparser.on('end', done);
+  
 
   feedparser.on('meta', function (meta) {
-    scanner.emit('feed_meta', {
-      meta: meta,
-      feed: feed
-    });
+    feedMeta = meta;
   });
 
   feedparser.on('readable', function () {
     var item;
     while (item = this.read()) {
-      scanner.emit('article', {
-        item: item,
-        feed: feed
-      });
+      articles.push(item);
     };
   });
 
-  if (callback && typeof(callback) === 'function') {
-    callback();
-  };
+  feedparser.on('end', function () {
+    console.log(feedMeta);
+    return callback(null, {
+      meta: feedMeta,
+      articles: articles
+    }); 
+  });
 };
 
 function getParams(str) {
@@ -174,6 +198,3 @@ function getParams(str) {
   return params;
 };
 
-var done = function (err) {
-  if (err) console.log(err, err.stack);
-};

@@ -24,7 +24,7 @@ async.series({
     });
   },
   addFeeds: function (callback) {
-    scanner.addFeeds(feedList.slice(0,500), function () {
+    scanner.addFeeds(feedList.slice(0,50), function () {
       callback(null);
     });
   },
@@ -39,16 +39,19 @@ async.series({
 });
 
 var numfired = 0;
-scanner.on('feed_meta', function (data) {
+scanner.on('feed', function (data) {
   var diff = process.hrtime(time);
-  console.log('%dms, Feed: %s, Title: %s', diff[1] / 1000000, data.feed, data.meta.title);
+  if (data.meta) {
+    console.log('%dms, Feed: %s, Title: %s', diff[1] / 1000000, data.feed, data.meta.title);
+  } else {
+    console.log('no meta for %s', data.feed);
+  };
   numfired += 1;
   console.log(numfired);
-  
 });
 
-scanner.on('error', function (err) {
-  console.log(err);
+scanner.on('error', function (data) {
+  console.log(data.feed + ' ' + data.err);
 }); 
 
 

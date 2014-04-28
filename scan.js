@@ -24,7 +24,7 @@ async.series({
     });
   },
   addFeeds: function (callback) {
-    scanner.addFeeds(feedList.slice(0,50), function () {
+    scanner.addFeeds(feedList.slice(0,500), function () {
       callback(null);
     });
   },

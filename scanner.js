@@ -82,18 +82,18 @@ FeedScanner.prototype.scan = function (concurrent, callback) {
           err: err
         });
         console.log('sent error');
-        return donefetch(err);
+      } else {
+        this.emit('feed', {
+          feed: feed,
+          meta: result.meta,
+          articles: result.articles
+        });
+        console.log('sent feed');
       };
-      console.log(feed);
-      this.emit('feed', {
-        feed: feed,
-        meta: result.meta,
-        articles: result.articles
-      });
-      donefetch(null, feed);
+      donefetch();
     }).bind(this));
   }).bind(this), concurrentFeeds);
-
+  
   // Called when queue is finished
   q.drain = function () { 
     var diff = process.hrtime(time);
@@ -102,25 +102,28 @@ FeedScanner.prototype.scan = function (concurrent, callback) {
   };
 
   // Add feeds to queue
-  q.push(this.feeds, function (err, feed) {
+  q.push(this.feeds, function (err) {
     if (err) return console.error(err);
-    return console.log('Finished processing %s', feed);
+    return console.log('Finished processing');
   });
 };
 
 // Fetches a feed
 FeedScanner.prototype.fetch = function (feed, callback) {
+  var sentError = false;
   function done(err) {
     //if (err) console.log(err, err.stack);
+    sentError = true;
+    console.log('returning error callback');
     return callback(err);
-  };
-
-  if (!validator.isURL(feed)) {
-    return this.emit('error', new Error(feed + ' is not a valid URL'));
   };
 
   if (callback && typeof(callback) != 'function') {
     return callback(new Error('Callback is not a function'));
+  };
+
+  if (!validator.isURL(feed)) {
+    return this.emit('error', new Error(feed + ' is not a valid URL'));
   };
 
   var charset = this.charset;
@@ -144,7 +147,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
     var resCharset;
 
     if (res.statusCode != 200) {
-      this.emit('error', 'Bad status code');
+      return this.emit('error', 'Bad status code');
     };
 
     resCharset = getParams(res.headers['content-type'] || '').charset;
@@ -157,7 +160,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
         iconv.on('error', done);
         stream = this.pipe(iconv);
       } catch (err) {
-        this.emit('error', err);
+        return this.emit('error', err);
       };
     };
 
@@ -166,7 +169,6 @@ FeedScanner.prototype.fetch = function (feed, callback) {
 
   feedparser.on('error', done);
   
-
   feedparser.on('meta', function (meta) {
     feedMeta = meta;
   });
@@ -179,11 +181,13 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   });
 
   feedparser.on('end', function () {
-    console.log(feedMeta);
-    return callback(null, {
-      meta: feedMeta,
-      articles: articles
-    }); 
+    console.log('sent end');
+    if (!sentError) {
+      callback(null, {
+        meta: feedMeta,
+        articles: articles
+      }); 
+    };
   });
 };
 

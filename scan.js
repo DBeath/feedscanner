@@ -51,7 +51,8 @@ scanner.on('feed', function (data) {
 });
 
 scanner.on('error', function (data) {
-  console.log(data.feed + ' ' + data.err);
+  console.log('Received error');
+  console.log(data.feed + ' : ' + data.err);
 }); 
 
 

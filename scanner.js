@@ -112,7 +112,7 @@ FeedScanner.prototype.scan = function (cb) {
   q.drain = function () { 
     var diff = process.hrtime(time);
     console.log('*/---------------------------------------------------------');
-    console.log('Finished sending feed requests in %dms', diff[1] / 1000000);
+    console.log('Finished sending feed requests in %ds:%dms', diff[0], diff[1] / 1000000);
     console.log('*/---------------------------------------------------------');
     cb(null, diff);
   };

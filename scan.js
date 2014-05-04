@@ -12,6 +12,9 @@ var scanner = app.createScanner({
 var feedList = [];
 var time;
 
+var numfired = 0;
+var numerrors = 0;
+
 async.series({
   lazy: function (callback) {
     new lazy(fs.createReadStream('./test/superfeedr_popular_feeds.txt'))
@@ -31,6 +34,8 @@ async.series({
   scan: function (callback) {
     time = process.hrtime();
     scanner.scan(function () {
+      console.log('Received %s feeds', numfired);
+      console.log('Received %s errors', numerrors);
       callback(null);
     });
   }
@@ -38,21 +43,23 @@ async.series({
   console.log('Finished array');
 });
 
-var numfired = 0;
+
+
 scanner.on('feed', function (data) {
   var diff = process.hrtime(time);
   if (data.meta) {
-    console.log('%dms, Feed: %s, Title: %s', diff[1] / 1000000, data.feed, data.meta.title);
+    console.log('%ds:%dms, Feed: %s, Title: %s', diff[0],diff[1] / 1000000, data.feed, data.meta.title);
   } else {
     console.log('no meta for %s', data.feed);
   };
   numfired += 1;
-  console.log(numfired);
+  
 });
 
 scanner.on('error', function (data) {
   console.log('Received error');
   console.log(data.feed + ' : ' + data.err);
+  numerrors += 1;
 }); 
 
 

@@ -6,7 +6,7 @@ var async = require('async');
 var scanner = app.createScanner({
   charset: 'UTF-8',
   scanInterval: 30,
-  concurrent: 20
+  concurrent: 5
 });
 
 var feedList = [];
@@ -24,7 +24,7 @@ async.series({
     });
   },
   addFeeds: function (callback) {
-    scanner.addFeeds(feedList.slice(0,50), function () {
+    scanner.addFeeds(feedList.slice(0,100), function () {
       callback(null);
     });
   },

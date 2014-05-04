@@ -64,47 +64,63 @@ FeedScanner.prototype.stopScanning = function () {
 };
 
 // Fetches all feeds in list
-FeedScanner.prototype.scan = function (concurrent, callback) {
-  if (!callback) {
-    var callback = concurrent;
-    var concurrentFeeds = this.concurrent;
-  } else {
-    var concurrentFeeds = concurrent || this.concurrent;
-  };
+FeedScanner.prototype.scan = function (cb) {
+  // if (!callback) {
+  //   var callback = concurrent;
+  //   var concurrentFeeds = this.concurrent;
+  // } else {
+  //   var concurrentFeeds = concurrent || this.concurrent;
+  // };
   var time = process.hrtime();
   console.log('Starting scan of %s feeds', this.feeds.length);
   // The queue function
-  var q = async.queue((function (feed, donefetch) {
+  var q = async.queue((function (feed, callback) {
     this.fetch(feed, (function (err, result) {
       if (err) {
         this.emit('error', {
           feed: feed,
           err: err
         });
-        console.log('sent error');
-      } else {
-        this.emit('feed', {
-          feed: feed,
-          meta: result.meta,
-          articles: result.articles
-        });
-        console.log('sent feed');
+        return callback();
       };
-      donefetch();
+
+      if (!result) {
+        return callback();
+      };
+
+      if (result.meta) {
+        var meta = result.meta;
+      };
+
+      if (result.articles) {
+        var articles = result.articles;
+      };
+
+      this.emit('feed', {
+        feed: feed,
+        meta: meta,
+        articles: articles
+      });
+
+      console.log(q.length());
+      return callback();
+
     }).bind(this));
-  }).bind(this), concurrentFeeds);
+  }).bind(this), this.concurrent);
   
   // Called when queue is finished
   q.drain = function () { 
     var diff = process.hrtime(time);
+    console.log('*/---------------------------------------------------------');
     console.log('Finished sending feed requests in %dms', diff[1] / 1000000);
-    callback(null, diff);
+    console.log('*/---------------------------------------------------------');
+    cb(null, diff);
   };
 
   // Add feeds to queue
   q.push(this.feeds, function (err) {
     if (err) return console.error(err);
-    return console.log('Finished processing');
+    return console.log('finished processing');
   });
 };
 
@@ -113,17 +129,21 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   var sentError = false;
   function done(err) {
     //if (err) console.log(err, err.stack);
-    sentError = true;
-    console.log('returning error callback');
-    return callback(err);
+    if (!sentError) {
+      sentError = true;
+      console.log('returning error callback');
+      return callback(err);
+    } else {
+      console.log(err);
+    };
   };
 
   if (callback && typeof(callback) != 'function') {
-    return callback(new Error('Callback is not a function'));
+    return done(new Error('Callback is not a function'));
   };
 
   if (!validator.isURL(feed)) {
-    return this.emit('error', new Error(feed + ' is not a valid URL'));
+    return done(new Error(feed + ' is not a valid URL'));
   };
 
   var charset = this.charset;
@@ -133,7 +153,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   var articles = [];
 
   // Sets the request
-  var req = request(feed, {timeout: 10000});
+  var req = request(feed, {timeout: 5000, pool: false});
   req.setHeader('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2'+ 
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1944.0 Safari/537.36');
   req.setHeader('accept', 'text/html,application/xhtml+xml');
@@ -147,7 +167,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
     var resCharset;
 
     if (res.statusCode != 200) {
-      return this.emit('error', 'Bad status code');
+      return done(new Error('Bad status code'));
     };
 
     resCharset = getParams(res.headers['content-type'] || '').charset;
@@ -160,7 +180,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
         iconv.on('error', done);
         stream = this.pipe(iconv);
       } catch (err) {
-        return this.emit('error', err);
+        return done(err);
       };
     };
 
@@ -181,7 +201,6 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   });
 
   feedparser.on('end', function () {
-    console.log('sent end');
     if (!sentError) {
       callback(null, {
         meta: feedMeta,

@@ -64,47 +64,96 @@ FeedScanner.prototype.stopScanning = function () {
 };
 
 // Fetches all feeds in list
-FeedScanner.prototype.scan = function (concurrent, callback) {
-  if (!callback) {
-    var callback = concurrent;
-    var concurrentFeeds = this.concurrent;
-  } else {
-    var concurrentFeeds = concurrent || this.concurrent;
-  };
+FeedScanner.prototype.scan = function (cb) {
+  // if (!callback) {
+  //   var callback = concurrent;
+  //   var concurrentFeeds = this.concurrent;
+  // } else {
+  //   var concurrentFeeds = concurrent || this.concurrent;
+  // };
   var time = process.hrtime();
   console.log('Starting scan of %s feeds', this.feeds.length);
   // The queue function
-  var q = async.queue((function (feed, donefetch) {
-    this.fetch(feed, function (err) {
-      if (err) return donefetch(err);
-      return donefetch(null, feed);
-    });
-  }).bind(this), concurrentFeeds);
+  var q = async.queue((function (feed, callback) {
+    this.fetch(feed, (function (err, result) {
+      if (err) {
+        this.emit('error', {
+          feed: feed,
+          err: err
+        });
+        return callback();
+      };
 
+      if (!result) {
+        return callback();
+      };
+
+      if (result.meta) {
+        var meta = result.meta;
+      };
+
+      if (result.articles) {
+        var articles = result.articles;
+      };
+
+      this.emit('feed', {
+        feed: feed,
+        meta: meta,
+        articles: articles
+      });
+
+      console.log(q.length());
+      return callback();
+
+    }).bind(this));
+  }).bind(this), this.concurrent);
+  
   // Called when queue is finished
   q.drain = function () { 
     var diff = process.hrtime(time);
-    console.log('Finished sending feed requests in %dms', diff[1] / 1e6);
-    callback(null, diff);
+    console.log('*/---------------------------------------------------------');
+    console.log('Finished sending feed requests in %ds:%dms', diff[0], diff[1] / 1000000);
+    console.log('*/---------------------------------------------------------');
+    cb(null, diff);
   };
 
   // Add feeds to queue
-  q.push(this.feeds, function (err, feed) {
+  q.push(this.feeds, function (err) {
     if (err) return console.error(err);
-    return console.log('Finished processing %s', feed);
+    return console.log('finished processing');
   });
 };
 
 // Fetches a feed
 FeedScanner.prototype.fetch = function (feed, callback) {
-  if (!validator.isURL(feed)) {
-    return this.emit('error', 'Not a valid URL');
+  var sentError = false;
+  function done(err) {
+    //if (err) console.log(err, err.stack);
+    if (!sentError) {
+      sentError = true;
+      console.log('returning error callback');
+      return callback(err);
+    } else {
+      console.log(err);
+    };
   };
+
+  if (callback && typeof(callback) != 'function') {
+    return done(new Error('Callback is not a function'));
+  };
+
+  if (!validator.isURL(feed)) {
+    return done(new Error(feed + ' is not a valid URL'));
+  };
+
   var charset = this.charset;
   var scanner = this;
 
+  var feedMeta = null;
+  var articles = [];
+
   // Sets the request
-  var req = request(feed, {timeout: 10000});
+  var req = request(feed, {timeout: 5000, pool: false});
   req.setHeader('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2'+ 
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1944.0 Safari/537.36');
   req.setHeader('accept', 'text/html,application/xhtml+xml');
@@ -118,7 +167,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
     var resCharset;
 
     if (res.statusCode != 200) {
-      this.emit('error', 'Bad status code');
+      return done(new Error('Bad status code'));
     };
 
     resCharset = getParams(res.headers['content-type'] || '').charset;
@@ -131,7 +180,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
         iconv.on('error', done);
         stream = this.pipe(iconv);
       } catch (err) {
-        this.emit('error', err);
+        return done(err);
       };
     };
 
@@ -139,28 +188,26 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   });
 
   feedparser.on('error', done);
-  feedparser.on('end', done);
-
+  
   feedparser.on('meta', function (meta) {
-    scanner.emit('feed_meta', {
-      meta: meta,
-      feed: feed
-    });
+    feedMeta = meta;
   });
 
   feedparser.on('readable', function () {
     var item;
     while (item = this.read()) {
-      scanner.emit('article', {
-        item: item,
-        feed: feed
-      });
+      articles.push(item);
     };
   });
 
-  if (callback && typeof(callback) === 'function') {
-    callback();
-  };
+  feedparser.on('end', function () {
+    if (!sentError) {
+      callback(null, {
+        meta: feedMeta,
+        articles: articles
+      }); 
+    };
+  });
 };
 
 function getParams(str) {
@@ -174,6 +221,3 @@ function getParams(str) {
   return params;
 };
 
-var done = function (err) {
-  if (err) console.log(err, err.stack);
-};

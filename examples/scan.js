@@ -83,7 +83,8 @@ scanner.on('feed', function (data) {
     },
     function (err, result) {
       if (err) console.log(err);
-      console.log('Updated %s', item.title);
+      var diff2 = process.hrtime(time);
+      console.log('%ds:%dms, Updated %s', diff2[0], diff2[1]/1000000,item.title);
     });
   });
   numfired += 1;

@@ -6,64 +6,120 @@ var validator = require('validator');
 var events = require('events');
 var util = require('util');
 
+/**
+ * Creates a FeedScanner service
+ *
+ * @module FeedScanner
+ * 
+ * @param [options] {Object} Options object
+ * @param [options.charset] {String} Charset to convert entries to
+ * @param [options.scanInterval] {Number} How often the scan will run, in seconds
+ * @param [options.concurrent] {Number} Maximum length of the request queue
+ * @return {Object} A FeedScanner object
+ */
 module.exports.createScanner = function (options) {
   return new FeedScanner(options);
 };
 
-// Creates a FeedScanner object
-// * charset - the charset to convert feeds to, can be false
-// * scanInterval - how often to scan the feeds, in seconds
-// * concurrent - the number of requests to send at once
+/**
+ * Creates a FeedScanner object
+ *
+ * @class FeedScanner
+ * @constructor
+ * @param [options] {Object} Options object
+ * @param [options.charset] {String} Charset to convert entries to
+ * @param [options.scanInterval] {Number} How often the scan will run, in seconds
+ * @param [options.concurrent] {Number} Maximum length of the request queue
+ */
 function FeedScanner(options) {
   this.charset = options.charset || 'utf-8';
   this.scanInterval = options.scanInterval || 300;
   this.concurrent = options.concurrent || 20;
 
   this.feeds = [];
+  this.startTime = null;
 };
 
 util.inherits(FeedScanner, events.EventEmitter);
 
+/**
+ * Returns the array of feeds
+ *
+ * @method listFeeds
+ * @return {Array} An array of feeds 
+ */
 FeedScanner.prototype.listFeeds = function () {
   return this.feeds;
 };
 
-// Adds an array of feeds to the feeds list
-FeedScanner.prototype.addFeeds = function (feeds, callback) {
+/**
+ * Adds an array of feeds to the feeds array
+ *
+ * @method addFeeds
+ * @param feeds {Array} An array of feed URLs to add 
+ */
+FeedScanner.prototype.addFeeds = function (feeds) {
   feeds.forEach((function (item, index, array) {
     this.feeds.push(item);
   }).bind(this));
-  return callback();
 };
 
-// Takes an array of feeds and removes each one from the feeds list
-FeedScanner.prototype.removeFeeds = function (feeds, callback) {
+/**
+ * Takes an array of feeds and removes each one from the feeds array
+ *
+ * @method removeFeeds
+ * @param feeds {Array} An array of feed URLs to remove
+ */
+FeedScanner.prototype.removeFeeds = function (feeds) {
   feeds.forEach((function (item, index, array) {
     var newIndex = this.feeds.indexOf(item);
     if (newIndex != -1) {
       this.feeds.splice(newIndex, 1);
     };
   }).bind(this));
-  return callback();
 };
 
-// Removes all feeds from list
-FeedScanner.prototype.removeAllFeeds = function (callback) {
+/**
+ * Removes all feeds from the feed array
+ *
+ * @method removeAllFeeds
+ */
+FeedScanner.prototype.removeAllFeeds = function () {
   feeds.splice(0, feeds.length+1);
-  return callback();
 };
 
-FeedScanner.prototype.startScanning = function () {
-  var intervalMilliseconds = this.scanInterval * 1000;
-  this.interval = setInterval(this.scan(function () {return;}), intervalMilliseconds);
+/**
+ * Starts the interval timer for scanning feeds
+ *
+ * @method startScanning
+ * @param [interval] {Number} How often the scan will run, in seconds
+ */
+FeedScanner.prototype.startScanning = function (interval) {
+  var intervalMilliseconds = interval * 1000 || this.scanInterval * 1000;
+  this.startTime = process.hrtime();
+  this.interval = setInterval(this.scan(function (diff) {
+    console.log('Queue drained in %ds and %dms', diff[0], diff[1]/1000000);
+    return;
+  }), intervalMilliseconds);
 };
 
+/**
+ * Stops the interval timer for scanning feeds
+ *
+ * @method stopScanning
+ */
 FeedScanner.prototype.stopScanning = function () {
   clearInterval(this.interval);
-  console.log('Finished scanning');
+  var diff = process.hrtime(this.startTime);
+  console.log('Finished scanning after % seconds', diff[0]);
 };
 
-// Fetches all feeds in list
+/**
+ * Fetches all the feeds in the array
+ *
+ * @method scan
+ * @param cb {Function} Callback containing time for queue to drain
+ */
 FeedScanner.prototype.scan = function (cb) {
 
   var time = process.hrtime();
@@ -72,14 +128,16 @@ FeedScanner.prototype.scan = function (cb) {
   var q = async.queue((function (feed, callback) {
     this.fetch(feed, (function (err, result) {
       if (err) {
+        // Emit an error event
         this.emit('error', {
           feed: feed,
           err: err
         });
-        return callback();
+        return callback(err);
       };
 
       if (!result) {
+        // Emit an error event
         this.emit('error', {
           feed: feed,
           err: new Error('Callback did not contain result')
@@ -87,21 +145,24 @@ FeedScanner.prototype.scan = function (cb) {
         return callback();
       };
 
+      var meta;
+      var articles = [];
+
       if (result.meta) {
-        var meta = result.meta;
+        meta = result.meta;
       };
 
       if (result.articles) {
-        var articles = result.articles;
+        articles = result.articles;
       };
 
+      // Emit a feed event
       this.emit('feed', {
         feed: feed,
         meta: meta,
         articles: articles
       });
 
-      console.log(q.length());
       return callback();
 
     }).bind(this));
@@ -124,7 +185,13 @@ FeedScanner.prototype.scan = function (cb) {
   });
 };
 
-// Fetches a feed
+/**
+ * Fetches a single feed
+ *
+ * @method fetch
+ * @param feed {String} The URL of a feed
+ * @param callback {Function} Callback containing error or fetched feed
+ */
 FeedScanner.prototype.fetch = function (feed, callback) {
   var sentError = false;
   function done(err) {
@@ -199,6 +266,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
     };
   });
 
+ // Return the feed
   feedparser.on('end', function () {
     if (!sentError) {
       return callback(null, {
@@ -209,6 +277,12 @@ FeedScanner.prototype.fetch = function (feed, callback) {
   });
 };
 
+/**
+ * Gets the parameters from a header string
+ *
+ * @method getParams
+ * @param str {String} A header string
+ */
 function getParams(str) {
   var params = str.split(';').reduce(function (params, param) {
     var parts = param.split('=').map(function (part) { return part.trim(); });
@@ -219,4 +293,3 @@ function getParams(str) {
   }, {});
   return params;
 };
-

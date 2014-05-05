@@ -1,4 +1,4 @@
-var app = require('./scanner.js');
+var app = require('../scanner.js');
 var fs = require('fs');
 var lazy = require('lazy');
 var async = require('async');
@@ -23,6 +23,7 @@ var numerrors = 0;
 var entries;
 
 async.series({
+  // Initialise the database
   db: function (callback) {
     MongoClient.connect('mongodb://localhost:27017/feedscanner', function (err, db) {
       if (err) return callback(err);
@@ -30,8 +31,9 @@ async.series({
       callback(null);
     });
   },
+  // Read the feeds from a file
   lazy: function (callback) {
-    new lazy(fs.createReadStream('./test/superfeedr_popular_feeds.txt'))
+    new lazy(fs.createReadStream('../test/superfeedr_popular_feeds.txt'))
     .on('end', function () {
         callback(null);
     })
@@ -40,11 +42,13 @@ async.series({
       feedList.push(line.toString());
     });
   },
+  // Add the feeds to the scanner
   addFeeds: function (callback) {
     scanner.addFeeds(feedList.slice(sliceStart,sliceEnd), function () {
       callback(null);
     });
   },
+  // Start scanning
   scan: function (callback) {
     time = process.hrtime();
     scanner.scan(function () {
@@ -86,14 +90,11 @@ scanner.on('feed', function (data) {
 });
 
 scanner.on('error', function (data) {
-  console.log('Received error');
   console.log(data.feed + ' : ' + data.err);
   numerrors += 1;
 }); 
 
 scanner.on('end', function (data) {
   var diff = data.time;
-  console.log('*/---------------------------------------------------------');
   console.log('Finished sending feed requests in %ds:%dms', diff[0], diff[1] / 1000000);
-  console.log('*/---------------------------------------------------------');
 });

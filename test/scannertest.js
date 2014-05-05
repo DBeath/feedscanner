@@ -58,31 +58,28 @@ describe('scanner', function () {
   it('should add feeds to array', function (done) {
     var feedArray = ['http://test.com', 'http://test2.com'];
 
-    scanner.addFeeds(feedArray, function () {
-      feeds = scanner.listFeeds();
-      expect(feeds).to.include('http://test.com');
-      expect(feeds).to.include('http://test2.com');
-      done();
-    });
+    scanner.addFeeds(feedArray);
+    feeds = scanner.listFeeds();
+    expect(feeds).to.include('http://test.com');
+    expect(feeds).to.include('http://test2.com');
+    done();
   });
 
   it('should remove feeds from the array', function (done) {
     var feedArray = ['http://test.com'];
 
-    scanner.removeFeeds(feedArray, function () {
-      feeds = scanner.listFeeds();
-      expect(feeds).to.include('http://test2.com');
-      expect(feeds).to.not.include('http://test.com');
-      done();
-    });
+    scanner.removeFeeds(feedArray);
+    feeds = scanner.listFeeds();
+    expect(feeds).to.include('http://test2.com');
+    expect(feeds).to.not.include('http://test.com');
+    done();
   });
 
   it('should remove all feeds from the array', function (done) {
     expect(scanner.listFeeds().length).to.equal(1);
-    scanner.removeAllFeeds(function () {
-      expect(scanner.feeds.length).to.equal(0);
-      done();
-    });
+    scanner.removeAllFeeds();
+    expect(scanner.feeds.length).to.equal(0);
+    done();
   });
 
   it('should return articles', function (done) {

@@ -120,7 +120,7 @@ FeedScanner.prototype.scan = function (cb) {
   // Add feeds to queue
   q.push(this.feeds, function (err) {
     if (err) return console.error(err);
-    return console.log('finished processing');
+    return;
   });
 };
 

@@ -86,6 +86,7 @@ describe('scanner', function () {
   });
 
   it('should return articles', function (done) {
+    time = process.hrtime();
     scanner.fetch('http://localhost:3000/rss.xml', function (err, results) {
       expect(results.meta).to.exist;
       expect(results.articles).to.exist;

@@ -9,6 +9,9 @@ var scanner = app.createScanner({
   concurrent: 5
 });
 
+var sliceStart = 0;
+var sliceEnd = 100;
+
 var feedList = [];
 var time;
 
@@ -27,7 +30,7 @@ async.series({
     });
   },
   addFeeds: function (callback) {
-    scanner.addFeeds(feedList.slice(0,100), function () {
+    scanner.addFeeds(feedList.slice(sliceStart,sliceEnd), function () {
       callback(null);
     });
   },
@@ -43,8 +46,6 @@ async.series({
   console.log('Finished array');
 });
 
-
-
 scanner.on('feed', function (data) {
   var diff = process.hrtime(time);
   if (data.meta) {
@@ -53,7 +54,6 @@ scanner.on('feed', function (data) {
     console.log('no meta for %s', data.feed);
   };
   numfired += 1;
-  
 });
 
 scanner.on('error', function (data) {
@@ -62,7 +62,10 @@ scanner.on('error', function (data) {
   numerrors += 1;
 }); 
 
-
-// setTimeout(function () {
-//   console.log(feedList);
-// }, 500);
+scanner.on('end', function (data) {
+  var diff = data.diff;
+  console.log('*/---------------------------------------------------------');
+  console.log('Finished sending feed requests in %ds:%dms', diff[0], diff[1] / 1000000);
+  console.log('*/---------------------------------------------------------');
+  process.exit();
+});

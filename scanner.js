@@ -65,12 +65,7 @@ FeedScanner.prototype.stopScanning = function () {
 
 // Fetches all feeds in list
 FeedScanner.prototype.scan = function (cb) {
-  // if (!callback) {
-  //   var callback = concurrent;
-  //   var concurrentFeeds = this.concurrent;
-  // } else {
-  //   var concurrentFeeds = concurrent || this.concurrent;
-  // };
+
   var time = process.hrtime();
   console.log('Starting scan of %s feeds', this.feeds.length);
   // The queue function
@@ -85,6 +80,10 @@ FeedScanner.prototype.scan = function (cb) {
       };
 
       if (!result) {
+        this.emit('error', {
+          feed: feed,
+          err: new Error('Callback did not contain result')
+        });
         return callback();
       };
 
@@ -109,13 +108,14 @@ FeedScanner.prototype.scan = function (cb) {
   }).bind(this), this.concurrent);
   
   // Called when queue is finished
-  q.drain = function () { 
+  q.drain = (function () { 
     var diff = process.hrtime(time);
-    console.log('*/---------------------------------------------------------');
-    console.log('Finished sending feed requests in %ds:%dms', diff[0], diff[1] / 1000000);
-    console.log('*/---------------------------------------------------------');
-    cb(null, diff);
-  };
+    
+    this.emit('end', {
+      time: diff
+    });
+    return cb(null, diff);
+  }).bind(this);
 
   // Add feeds to queue
   q.push(this.feeds, function (err) {
@@ -131,7 +131,6 @@ FeedScanner.prototype.fetch = function (feed, callback) {
     //if (err) console.log(err, err.stack);
     if (!sentError) {
       sentError = true;
-      console.log('returning error callback');
       return callback(err);
     } else {
       console.log(err);
@@ -202,7 +201,7 @@ FeedScanner.prototype.fetch = function (feed, callback) {
 
   feedparser.on('end', function () {
     if (!sentError) {
-      callback(null, {
+      return callback(null, {
         meta: feedMeta,
         articles: articles
       }); 

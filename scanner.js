@@ -92,12 +92,16 @@ FeedScanner.prototype.removeAllFeeds = function () {
  * Starts the interval timer for scanning feeds
  *
  * @method startScanning
+ * @param processFeed {Function} Called when feed is fetched
  * @param [interval] {Number} How often the scan will run, in seconds
  */
-FeedScanner.prototype.startScanning = function (interval) {
+FeedScanner.prototype.startScanning = function (processFeed, interval) {
+  if (processFeed && typeof processFeed != 'function') {
+    return new Error('ProcessFeed is not a function');
+  };
   var intervalMilliseconds = interval * 1000 || this.scanInterval * 1000;
   this.startTime = process.hrtime();
-  this.interval = setInterval(this.scan(function (diff) {
+  this.interval = setInterval(this.scan(processFeed, function (diff) {
     console.log('Queue drained in %ds and %dms', diff[0], diff[1]/1000000);
     return;
   }), intervalMilliseconds);
@@ -118,52 +122,23 @@ FeedScanner.prototype.stopScanning = function () {
  * Fetches all the feeds in the array
  *
  * @method scan
+ * @param processFeed {Function} Called when feed is fetched
  * @param cb {Function} Callback containing time for queue to drain
  */
-FeedScanner.prototype.scan = function (cb) {
-
+FeedScanner.prototype.scan = function (processFeed, cb) {
+  if (processFeed && typeof processFeed != 'function') {
+    return new Error('ProcessFeed is not a function');
+  };
   var time = process.hrtime();
   console.log('Starting scan of %s feeds', this.feeds.length);
   // The queue function
   var q = async.queue((function (feed, callback) {
     this.fetch(feed, (function (err, result) {
-      if (err) {
-        // Emit an error event
-        this.emit('error', {
-          feed: feed,
-          err: err
-        });
+
+      // Process the feed
+      processFeed(err, feed, result, function (err) {
         return callback(err);
-      };
-
-      if (!result) {
-        // Emit an error event
-        this.emit('error', {
-          feed: feed,
-          err: new Error('Callback did not contain result')
-        });
-        return callback();
-      };
-
-      var meta;
-      var articles = [];
-
-      if (result.meta) {
-        meta = result.meta;
-      };
-
-      if (result.articles) {
-        articles = result.articles;
-      };
-
-      // Emit a feed event
-      this.emit('feed', {
-        feed: feed,
-        meta: meta,
-        articles: articles
       });
-
-      return callback();
 
     }).bind(this));
   }).bind(this), this.concurrent);

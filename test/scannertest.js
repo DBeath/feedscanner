@@ -92,7 +92,7 @@ describe('scanner', function () {
     });
   });
 
-  it('should emit feed events', function (done) {
+  it('should scan multiple feeds', function (done) {
     numFeedFired = 0;
 
     scanner.removeAllFeeds(function () {
@@ -104,19 +104,27 @@ describe('scanner', function () {
       'http://localhost:3000/test.xml'
     ];
     scanner.addFeeds(feedArray, function () {
-      expect(scanner.feeds.length).to.equal(3);
+      expect(scanner.feeds.length, 'feeds length').to.equal(3);
       expect(scanner.listFeeds()).to.include('http://localhost:3000/rss.xml');
     });
 
+    var numFeeds = 0;
+    var numErr = 0;
     time = process.hrtime();
-    scanner.scan(function () {
-      return;
-    });
+    var processFeed = function (err, feed, result, callback) {
+      if (err) {
+        numErr += 1;
+        return callback(err);
+      };
+      numFeeds += 1;
+      console.log('Processed %s', feed);
+      return callback();
+    };
 
-    setTimeout(function () {
-      expect(numFeedFired).to.equal(2);
-      expect(numErrorFired).to.equal(1);
+    scanner.scan(processFeed, function () {
+      expect(numFeeds, 'number of feeds').to.equal(2);
+      expect(numErr, 'number of errors').to.equal(1);
       done();
-    }, 100);
+    });
   });
 });

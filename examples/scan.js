@@ -40,23 +40,10 @@ var processFeed = function (err, feed, result, callback) {
   var bulkop = entries.initializeUnorderedBulkOp();
 
   result.articles.forEach(function (item, index, array) {
-    buklop.update({
-      id: item.guid
-    },
-    item,
-    {
-      upsert: true,
-    });
-    results = bulkop.execute(function (err, result) {
-      if (err) {
-        console.log(err);
-        return callback(err);
-      };
-      var diff2 = process.hrtime(time);
-      console.log('%ds:%dms, Updated %s', diff2[0], diff2[1]/1000000,result.meta.title);
-      return callback();
-    });
+    bulkop.find({id: item.guid}).updateOne(item).upsert();
   });
+  
+  bulkop.execute();
 };
 
 async.series({

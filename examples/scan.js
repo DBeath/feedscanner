@@ -39,15 +39,21 @@ var processFeed = function (err, feed, result, callback) {
   };
   // Add articles to database
   var bulkop = entries.initializeUnorderedBulkOp();
+  var ops = 0;
 
   result.articles.forEach(function (item, index, array) {
     bulkop.find({id: item.guid}).upsert().updateOne(item);
+    ops += 1;
   });
   
-  bulkop.execute(function (err, result) {
-    if (err) return callback(err);
+  if (ops >= 1) {
+    bulkop.execute(function (err, result) {
+      if (err) return callback(err);
+      return callback();
+    });
+  } else {
     return callback();
-  });
+  };
 };
 
 async.series({

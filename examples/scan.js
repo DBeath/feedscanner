@@ -30,6 +30,7 @@ var processFeed = function (err, feed, result, callback) {
     // Return callback on error
     return callback(err);
   };
+  var diff = process.hrtime(time);
   numfired += 1;
   if (result.meta) {
     console.log('%ds:%dms, Feed: %s, Title: %s', diff[0],diff[1] / 1000000, feed, result.meta.title);
@@ -40,10 +41,13 @@ var processFeed = function (err, feed, result, callback) {
   var bulkop = entries.initializeUnorderedBulkOp();
 
   result.articles.forEach(function (item, index, array) {
-    bulkop.find({id: item.guid}).updateOne(item).upsert();
+    bulkop.find({id: item.guid}).upsert().updateOne(item);
   });
   
-  bulkop.execute();
+  bulkop.execute(function (err, result) {
+    if (err) return callback(err);
+    return callback();
+  });
 };
 
 async.series({
@@ -52,6 +56,7 @@ async.series({
     MongoClient.connect('mongodb://localhost:27017/feedscanner', function (err, db) {
       if (err) return callback(err);
       entries = new mongodb.Collection(db, 'entries');
+      console.log('Connected to database');
       callback(null);
     });
   },
@@ -59,7 +64,8 @@ async.series({
   lazy: function (callback) {
     new lazy(fs.createReadStream('../test/superfeedr_popular_feeds.txt'))
     .on('end', function () {
-        callback(null);
+      console.log('Loaded feeds');
+      callback(null);
     })
     .lines
     .forEach(function (line) {
@@ -68,9 +74,9 @@ async.series({
   },
   // Add the feeds to the scanner
   addFeeds: function (callback) {
-    scanner.addFeeds(feedList.slice(sliceStart,sliceEnd), function () {
-      callback(null);
-    });
+    scanner.addFeeds(feedList.slice(sliceStart,sliceEnd));
+    console.log('Added feeds to scanner');
+    callback(null);
   },
   // Start scanning
   scan: function (callback) {
